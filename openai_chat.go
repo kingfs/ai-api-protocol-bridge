@@ -605,6 +605,26 @@ func encodeOpenAIChatMessages(message Message) ([]openAIChatMessage, error) {
 		return encodeOpenAIToolMessages(message), nil
 	}
 
+	// A tool result does not have to arrive as a tool-role message: Anthropic
+	// expresses it as a user message containing a tool-result part. The loop
+	// below reads only text, refusal and tool-call parts, so such a message
+	// would encode as an empty user turn and the tool's output would be
+	// dropped. Emit the tool messages first, which is where the chat protocol
+	// requires them (directly after the assistant turn that made the call), and
+	// encode anything else the message carries under its own role.
+	if hasToolResultPart(message.Parts) {
+		encoded := encodeOpenAIToolMessages(message)
+		remaining := withoutToolResultParts(message)
+		if len(remaining.Parts) == 0 {
+			return encoded, nil
+		}
+		rest, err := encodeOpenAIChatMessages(remaining)
+		if err != nil {
+			return nil, err
+		}
+		return append(encoded, rest...), nil
+	}
+
 	encoded := openAIChatMessage{
 		Role:    string(message.Role),
 		Content: encodeOpenAITextContent(message.Parts),
@@ -637,6 +657,29 @@ func encodeOpenAIChatMessages(message Message) ([]openAIChatMessage, error) {
 	}
 
 	return []openAIChatMessage{encoded}, nil
+}
+
+func hasToolResultPart(parts []Part) bool {
+	for _, part := range parts {
+		if part.Type == PartToolResult && part.ToolResult != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutToolResultParts returns a copy of the message with its tool-result
+// parts removed, leaving the caller's message untouched.
+func withoutToolResultParts(message Message) Message {
+	parts := make([]Part, 0, len(message.Parts))
+	for _, part := range message.Parts {
+		if part.Type == PartToolResult && part.ToolResult != nil {
+			continue
+		}
+		parts = append(parts, part)
+	}
+	message.Parts = parts
+	return message
 }
 
 func encodeOpenAIToolMessages(message Message) []openAIChatMessage {
