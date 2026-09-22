@@ -53,17 +53,40 @@ func (b anthropicToOpenAIChatBridge) NewStreamEncoder(opts StreamEncodeOptions) 
 // anthropicStreamEncoderForChatUpstream writes neutral stream parts as Anthropic
 // SSE for a chat-completions upstream.
 //
-// The usage has to be rebased on the way out. The chat decoder reports prompt
-// tokens the way OpenAI does — the total, with the cached portion broken out
-// separately — while Anthropic expects input_tokens to exclude what was served
-// from cache and reports the cached count in cache_read_input_tokens. Passing
-// the chat numbers straight through would count every cached token twice.
+// Two things separate it from the plain Anthropic encoder.
+//
+// The first is usage. The chat decoder reports prompt tokens the way OpenAI
+// does — the total, with the cached portion broken out separately — while
+// Anthropic expects input_tokens to exclude what was served from cache and
+// reports the cached count in cache_read_input_tokens. Passing the chat numbers
+// straight through would count every cached token twice.
+//
+// The second is ordering. OpenAI reports usage in a chunk of its own, after the
+// chunk carrying finish_reason, and the chat decoder surfaces it as a
+// StreamResponseMetadata part. Anthropic has no event that can carry usage after
+// message_delta, and the plain encoder ignores that part outright, so a finish
+// that arrives without usage is held until the usage arrives. A stream that
+// never reports usage still gets its finish: Close flushes it.
 type anthropicStreamEncoderForChatUpstream struct {
-	ant anthropicStreamEncoder
+	ant     anthropicStreamEncoder
+	pending *StreamPart
 }
 
 func (e *anthropicStreamEncoderForChatUpstream) Encode(part StreamPart) ([]RawStreamEvent, error) {
-	if part.Type == StreamStart || part.Type == StreamFinish || part.Type == StreamResponseMetadata {
+	switch part.Type {
+	case StreamResponseMetadata:
+		return e.flushPending(part.Usage)
+	case StreamFinish:
+		// A provider may report usage on the finish chunk itself, in which case
+		// there is nothing to wait for.
+		if hasUsage(part.Usage) {
+			part.Usage = responsesUsageToAnthropicUsage(part.Usage)
+			return e.ant.Encode(part)
+		}
+		held := part
+		e.pending = &held
+		return nil, nil
+	case StreamStart:
 		part.Usage = responsesUsageToAnthropicUsage(part.Usage)
 	}
 	if part.Type == StreamReasoningDelta {
@@ -74,8 +97,29 @@ func (e *anthropicStreamEncoderForChatUpstream) Encode(part StreamPart) ([]RawSt
 	return e.ant.Encode(part)
 }
 
+// flushPending emits a held finish, carrying the usage that has just arrived.
+func (e *anthropicStreamEncoderForChatUpstream) flushPending(usage Usage) ([]RawStreamEvent, error) {
+	if e.pending == nil {
+		return nil, nil
+	}
+	finish := *e.pending
+	e.pending = nil
+	if hasUsage(usage) {
+		finish.Usage = responsesUsageToAnthropicUsage(usage)
+	}
+	return e.ant.Encode(finish)
+}
+
 func (e *anthropicStreamEncoderForChatUpstream) Close() ([]RawStreamEvent, error) {
-	return e.ant.Close()
+	events, err := e.flushPending(Usage{})
+	if err != nil {
+		return nil, err
+	}
+	closed, err := e.ant.Close()
+	if err != nil {
+		return nil, err
+	}
+	return append(events, closed...), nil
 }
 
 func (e *anthropicStreamEncoderForChatUpstream) EncodeError(err error) []RawStreamEvent {
