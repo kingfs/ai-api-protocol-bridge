@@ -1,4 +1,6 @@
 # Local scratch space: Go build cache, downloaded protocol sources, probe programs.
 .scratch/
+# Downloaded vendor docs corpus (research input, not a deliverable).
+.scratch-corpus/
 __pycache__/
 *.pyc
