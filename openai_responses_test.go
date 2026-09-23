@@ -2,6 +2,7 @@ package protocolbridge
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -1377,5 +1378,135 @@ func TestOpenAIResponsesStreamEncoderFinishDetails(t *testing.T) {
 				t.Fatalf("error missing from response = %+v", event.Response)
 			}
 		})
+	}
+}
+
+// TestOpenAIResponsesStreamEncoderIncrementalToolCallCompletesTheItem pins the
+// three defects a Responses client hit when a tool call arrived as
+// start/delta/end rather than as one atomic part: the arguments were missing
+// from response.function_call_arguments.done even though the schema requires
+// them, no response.output_item.done was emitted at all, and the finished
+// output was nested beside the response object instead of inside it.
+func TestOpenAIResponsesStreamEncoderIncrementalToolCallCompletesTheItem(t *testing.T) {
+	encoder, err := NewOpenAIResponsesAdapter().NewStreamEncoder(StreamEncodeOptions{Model: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("NewStreamEncoder() error = %v", err)
+	}
+
+	eventsOf := func(part StreamPart) []openAIResponsesStreamEvent {
+		t.Helper()
+		raw, err := encoder.Encode(part)
+		if err != nil {
+			t.Fatalf("Encode(%s) error = %v", part.Type, err)
+		}
+		decoded := make([]openAIResponsesStreamEvent, 0, len(raw))
+		for _, event := range raw {
+			var parsed openAIResponsesStreamEvent
+			if err := json.Unmarshal(event.Data, &parsed); err != nil {
+				t.Fatalf("json.Unmarshal(%s) error = %v", event.Data, err)
+			}
+			decoded = append(decoded, parsed)
+		}
+		return decoded
+	}
+
+	if _, err := encoder.Encode(StreamPart{Type: StreamStart, ID: "resp_1"}); err != nil {
+		t.Fatalf("Encode(StreamStart) error = %v", err)
+	}
+	eventsOf(StreamPart{Type: StreamToolInputStart, ID: "fc_1", ToolCallID: "call_1", ToolName: "get_weather"})
+	eventsOf(StreamPart{Type: StreamToolInputDelta, ID: "fc_1", ToolCallID: "call_1", Delta: `{"city":`})
+	eventsOf(StreamPart{Type: StreamToolInputDelta, ID: "fc_1", ToolCallID: "call_1", Delta: `"Paris"}`})
+
+	end := eventsOf(StreamPart{Type: StreamToolInputEnd, ID: "fc_1", ToolCallID: "call_1"})
+	if len(end) != 2 {
+		t.Fatalf("StreamToolInputEnd events = %+v", end)
+	}
+	if end[0].Type != "response.function_call_arguments.done" {
+		t.Fatalf("first end event = %+v", end[0])
+	}
+	if end[0].Arguments != `{"city":"Paris"}` {
+		t.Fatalf("response.function_call_arguments.done arguments = %q, want the accumulated JSON", end[0].Arguments)
+	}
+	if end[1].Type != "response.output_item.done" {
+		t.Fatalf("second end event = %+v", end[1])
+	}
+	if end[1].Item == nil || end[1].Item.Type != "function_call" || end[1].Item.Status != "completed" {
+		t.Fatalf("output_item.done item = %+v", end[1].Item)
+	}
+	itemJSON, err := json.Marshal(end[1].Item)
+	if err != nil {
+		t.Fatalf("json.Marshal(item) error = %v", err)
+	}
+	var itemFields map[string]any
+	if err := json.Unmarshal(itemJSON, &itemFields); err != nil {
+		t.Fatalf("json.Unmarshal(item) error = %v", err)
+	}
+	if itemFields["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("output_item.done arguments = %v, want the accumulated JSON", itemFields["arguments"])
+	}
+
+	finish, err := encoder.Encode(StreamPart{Type: StreamFinish, FinishReason: FinishToolCalls})
+	if err != nil {
+		t.Fatalf("Encode(StreamFinish) error = %v", err)
+	}
+	if len(finish) != 1 {
+		t.Fatalf("StreamFinish events = %+v", finish)
+	}
+	var completed openAIResponsesStreamEvent
+	if err := json.Unmarshal(finish[0].Data, &completed); err != nil {
+		t.Fatalf("json.Unmarshal(complete) error = %v", err)
+	}
+	if completed.Type != "response.completed" || completed.Response == nil {
+		t.Fatalf("completion event = %+v", completed)
+	}
+	if len(completed.Response.Output) != 1 || completed.Response.Output[0].Type != "function_call" {
+		t.Fatalf("response.output = %+v, want the tool call nested inside the response", completed.Response.Output)
+	}
+	// The output must not also sit beside the response object.
+	var rawCompletion map[string]any
+	if err := json.Unmarshal(finish[0].Data, &rawCompletion); err != nil {
+		t.Fatalf("json.Unmarshal(raw completion) error = %v", err)
+	}
+	if _, ok := rawCompletion["output"]; ok {
+		t.Fatalf("output leaked to the event top level: %+v", rawCompletion)
+	}
+	if string(finish[0].Data) == "" || strings.Contains(string(finish[0].Data), `"usage":{}`) {
+		t.Fatalf("an output item serialised as an empty usage object: %s", finish[0].Data)
+	}
+}
+
+// TestOpenAIResponsesContentPartEventUsesThePartKey guards the event member
+// name: the decoder's own handling of response.content_part.added was dead code
+// because the encoder emitted `content_part`, which is not in the protocol.
+func TestOpenAIResponsesContentPartEventUsesThePartKey(t *testing.T) {
+	encoder, err := NewOpenAIResponsesAdapter().NewStreamEncoder(StreamEncodeOptions{Model: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("NewStreamEncoder() error = %v", err)
+	}
+	if _, err := encoder.Encode(StreamPart{Type: StreamStart, ID: "resp_1"}); err != nil {
+		t.Fatalf("Encode(StreamStart) error = %v", err)
+	}
+	raw, err := encoder.Encode(StreamPart{Type: StreamTextStart, ID: "content_0"})
+	if err != nil {
+		t.Fatalf("Encode(StreamTextStart) error = %v", err)
+	}
+	var added *openAIResponsesStreamEvent
+	for i := range raw {
+		var parsed openAIResponsesStreamEvent
+		if err := json.Unmarshal(raw[i].Data, &parsed); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
+		if parsed.Type == "response.content_part.added" {
+			added = &parsed
+		}
+	}
+	if added == nil {
+		t.Fatalf("no response.content_part.added in %+v", raw)
+	}
+	if added.ContentPart == nil || added.ContentPart.Type != "output_text" {
+		t.Fatalf("content part = %+v", added.ContentPart)
+	}
+	if strings.Contains(string(raw[0].Data), `"content_part"`) {
+		t.Fatalf("event uses the undefined content_part key: %s", raw[0].Data)
 	}
 }

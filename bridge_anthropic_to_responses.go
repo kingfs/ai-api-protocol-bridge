@@ -56,6 +56,15 @@ func (b anthropicToOpenAIResponsesBridge) EncodeUpstreamRequest(req *LLMRequest,
 	}
 	request.Input = input
 
+	// The Responses API has no stop parameter at all, so a stop sequence the
+	// Anthropic client sent cannot be expressed. The adapter refuses such a
+	// request outright; the bridge degrades instead - rejecting every turn that
+	// carries stop_sequences would make it unusable - and reports what it
+	// dropped in the same channel it uses for tools it cannot translate.
+	if len(req.StopSequences) > 0 {
+		request.Instructions = appendInstructionsText(request.Instructions, fmt.Sprintf("Proxy compatibility warning: stop_sequences %q are not supported by the OpenAI Responses API and were omitted.", strings.Join(req.StopSequences, ", ")))
+	}
+
 	return json.Marshal(request)
 }
 

@@ -1505,3 +1505,93 @@ func firstAnthropicContentBlockStop(events []RawStreamEvent) *anthropicStreamEve
 	}
 	return nil
 }
+
+// TestAnthropicInboundChatUpstreamStreamLifecycle pins the two lifecycle
+// defects that a live gateway's Anthropic output exposed when the upstream
+// spoke chat completions. The chunk carrying delta.role produced a second
+// StreamStart, which became a second message_start event, and the encoder never
+// closed a content block, so a client that had read a text block or a tool call
+// waited forever for its content_block_stop.
+func TestAnthropicInboundChatUpstreamStreamLifecycle(t *testing.T) {
+	bridge, ok := NewCrossFamilyBridgeForProtocol(ProtocolAnthropicMessages, ProtocolOpenAIChat)
+	if !ok {
+		t.Fatal("NewCrossFamilyBridgeForProtocol() ok = false, want true")
+	}
+	decoder, err := bridge.NewStreamDecoder(StreamDecodeOptions{})
+	if err != nil {
+		t.Fatalf("NewStreamDecoder() error = %v", err)
+	}
+	encoder, err := bridge.NewStreamEncoder(StreamEncodeOptions{Model: "claude-sonnet"})
+	if err != nil {
+		t.Fatalf("NewStreamEncoder() error = %v", err)
+	}
+
+	chunks := []string{
+		`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1790144826,"model":"deepseek-flash","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1790144826,"model":"deepseek-flash","choices":[{"index":0,"delta":{"content":"Paris"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1790144826,"model":"deepseek-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1790144826,"model":"deepseek-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"Paris\"}"}}]},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1790144826,"model":"deepseek-flash","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+	}
+
+	sequence := make([]string, 0)
+	for _, chunk := range chunks {
+		parts, err := decoder.Decode(RawStreamEvent{Data: []byte(chunk)})
+		if err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		for _, part := range parts {
+			events, err := encoder.Encode(part)
+			if err != nil {
+				t.Fatalf("Encode(%s) error = %v", part.Type, err)
+			}
+			for _, event := range events {
+				sequence = append(sequence, event.Event)
+			}
+		}
+	}
+	events, err := encoder.Close()
+	if err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	for _, event := range events {
+		sequence = append(sequence, event.Event)
+	}
+
+	starts, stops := 0, 0
+	for _, event := range sequence {
+		switch event {
+		case "message_start":
+			starts++
+		case "content_block_stop":
+			stops++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("message_start emitted %d times, want 1: %v", starts, sequence)
+	}
+	// A text block and a tool_use block are opened, so both must be closed.
+	if stops != 2 {
+		t.Fatalf("content_block_stop emitted %d times, want one per content block: %v", stops, sequence)
+	}
+	// Anthropic delivers content blocks one at a time, so every
+	// content_block_start after the first must be preceded by a stop.
+	open := 0
+	for _, event := range sequence {
+		switch event {
+		case "content_block_start":
+			if open != 0 {
+				t.Fatalf("content_block_start while a block was still open: %v", sequence)
+			}
+			open++
+		case "content_block_stop":
+			if open == 0 {
+				t.Fatalf("content_block_stop with no open block: %v", sequence)
+			}
+			open--
+		}
+	}
+	if open != 0 {
+		t.Fatalf("a content block was never closed: %v", sequence)
+	}
+}
