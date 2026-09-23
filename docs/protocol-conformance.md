@@ -19,9 +19,13 @@ of this document that are mechanically checkable, and
 [`schema_support_test.go`](../schema_support_test.go) implements the small JSON
 Schema subset validator they use.
 
-**Status of this document.** It reports the current implementation as found. No
-`.go` implementation file was changed to produce it — see
-[Recommended remediation](#recommended-remediation).
+**Status of this document.** Sections [1](#1-how-the-standard-was-built) to
+[4](#4-cross-protocol-convertibility) report the implementation as it was found
+and were written without changing any `.go` file. The findings they describe
+have since been remediated in place; §[5](#5-remediation-status) records what
+was fixed, in which commit, and what is still open. Where a section below still
+describes the pre-fix behaviour, the fix is noted at the head of that section
+and the section text is left as the evidence it originally was.
 
 ---
 
@@ -139,6 +143,11 @@ Request encode defects (undocumented output):
 
 ### 3.2 OpenAI Chat Completions — response
 
+> **Fixed** in `47e2751`: the required response members (`id`, `object`,
+> `created`, `model`, `choices[].logprobs`, `usage`) and the assistant
+> `content`/`refusal` members are now emitted, and the invented token limit is
+> gone. The decode losses listed below still stand.
+
 Decode losses: `choices[].logprobs` (the object is required by the schema, has no
 wire field, and is dropped), `message.annotations`, `message.function_call`,
 `message.audio`, `service_tier`, `system_fingerprint`,
@@ -170,6 +179,10 @@ plus, for a tool-call-only assistant message, `missing-required /choices/0/messa
 | CS9 | `reasoning_effort` round-trip is broken | decode discards the value, encode always writes `"medium"`; `LLMRequest.ReasoningEffort` is dead for this adapter |
 
 ### 3.3 OpenAI Chat Completions — streaming
+
+> **Fixed** in `360db99`: `created` is a real timestamp that is stable across a
+> stream, the stream has exactly one start and one end, and `xhigh` is no longer
+> produced. The decode losses listed below still stand.
 
 The stream chunk schema requires `id`, `object`, `created`, `model`, `choices`.
 Encode violations:
@@ -227,6 +240,13 @@ Notable losses and inventions:
   `Functions: no-branch /tools/0 oneOf` (closest branch: missing required `strict`).
 
 ### 3.5 OpenAI Responses — response
+
+> **Fixed** in `9ed22ff`: the `Response` envelope carries every required member,
+> output items no longer carry a spurious `usage`, the incremental tool call
+> emits `response.function_call_arguments.done` with its arguments and a
+> following `response.output_item.done`, the content-part event uses `part`, and
+> the finished output is nested inside `response`. The dropped output item types
+> listed below still stand — see §5.3.
 
 `OutputItem` is a union of six members. The adapter handles `message`,
 `reasoning` and `function_call`, plus several types that are *not* output item
@@ -352,6 +372,9 @@ Other request findings:
 
 ### 3.7 Anthropic Messages — response
 
+> **Fixed** in `549858f`: the violations pinned below are gone, and all three
+> response encoders are now schema clean.
+
 The pinned encode violations:
 
 ```text
@@ -408,6 +431,10 @@ Other response findings:
   round-trip out as a warning text block.
 
 ### 3.8 Anthropic Messages — streaming
+
+> **Fixed** in `05a4dec`: content blocks are delivered sequentially and every
+> block is closed, including on `Close()`. The dropped event types listed below
+> still stand.
 
 Decode handles all six `RawMessageStreamEvent` branches plus `ping` and `error`
 (the latter two appear in real transcripts but are not in the event union).
@@ -512,6 +539,10 @@ adapter only); response state into Responses.
 
 ### 4.5 Expressible but not implemented
 
+> **Partly fixed.** Item 1 and the `top_k` part of the list below are still
+> open; Anthropic's dropped `ToolUnion` branches are fixed in `4ca6e18`, and the
+> stop-sequence asymmetry is fixed in `549a89d`.
+
 These are the actionable conversion gaps, ordered by payoff:
 
 1. **Chat ↔ Responses conversion is absent** even though both protocols are fully
@@ -536,41 +567,68 @@ These are the actionable conversion gaps, ordered by payoff:
 
 ---
 
-## 5. Recommended remediation
+## 5. Remediation status
 
-Nothing below has been applied. The suggested order:
+The report above was calibrated against two further sources before anything was
+changed: a live multi-protocol gateway (`ai-api-gateway.app.baizhi.cloud`) whose
+OpenAI and Anthropic endpoints were driven with real requests, and a
+third-party client's field report of the Responses stream as it actually
+arrives. Both confirmed findings that reading the code alone had left open. All
+three response encoders now pass the checked-in schemas with **zero** violations,
+down from 11 (Anthropic), 21 (Responses) and 14 (Chat).
 
-**Tier 1 — hard schema violations in encoder output.** `created` in Chat
-responses and stream chunks; `choices[].logprobs`; `content` and `refusal` on
-assistant messages; `id` on Chat responses; `messages: null`; `schema: null`;
-`"usage": {}`; the Responses `content_part` → `part` key and the required event
-members; the ten missing required `Response` properties; Anthropic
-`stop_sequence` / `container` / required usage members; the `xhigh` effort value.
+### 5.1 Fixed
 
-**Tier 2 — internal correctness bugs with no schema angle.** `currentTimestamp()`
-returning 0; the duplicate `StreamStart` / duplicate `message_start`; the missing
-content-block close on the Chat-upstream Anthropic path; `decodeAnthropicUsage`
-not setting `ReasoningTokens`; the dead `content_part.added` decode branch;
-unknown finish reasons silently becoming `stop`.
+| # | Finding | Commit |
+| --- | --- | --- |
+| 1 | Chat response omitted `id`/`object`/`created`/`model`; `created` was always `0`; `choices[].logprobs` absent; assistant `content`/`refusal` dropped when empty; `usage` omitted entirely | `47e2751` |
+| 2 | Chat stream emitted two `StreamStart` parts, invented a `4096` token limit for an unset `max_output_tokens`, and clamped `reasoning_effort` to a value the API does not define (`xhigh`) | `360db99` |
+| 3 | Responses envelope was missing ten required `Response` members; every output item carried a bogus `"usage": {}`; the streamed tool call emitted `response.function_call_arguments.done` without `arguments` and never emitted `response.output_item.done`; the finished `output` was nested beside the `response` object instead of inside it; the content-part event used the undefined key `content_part` | `9ed22ff` |
+| 4 | Anthropic stream opened a second content block before closing the first and left the last one open forever, so a client waited for a `content_block_stop` that never came | `05a4dec` |
+| 5 | Anthropic `Message` omitted the required `container`, `stop_details` and `stop_sequence`; `usage` carried four of nine members; a text block omitted `citations` and a tool_use block omitted `caller`; `output_tokens_details.thinking_tokens` was never read, so reasoning usage was lost on every conversion to OpenAI | `549858f` |
+| 6 | 20 of Anthropic's 21 `ToolUnion` branches were dropped on decode; a custom tool's required `input_schema` was omitted; the Chat→Anthropic path copied `top_p` but not `top_k`; an empty prompt serialised as `"messages": null` instead of being reported | `4ca6e18` |
+| 7 | A stop sequence on the Anthropic→Responses path was dropped in silence while the adapter refuses it outright; it is now reported through the existing compatibility warning | `549a89d` |
 
-**Tier 3 — decode coverage.** Anthropic's 20 dropped `ToolUnion` branches (use the
-existing `ToolProviderDefined` slot); Anthropic's 9 dropped content-block
-variants; Responses' dropped `file_search_call` / `web_search_call` /
-`computer_call` output items and annotations; Chat `metadata`, `logprobs`,
-`store` and the remaining documented request fields; the Chat `name` field and
-`role: "function"`.
+### 5.2 Deliberately not changed
 
-**Tier 4 — conversion gaps.** Chat ↔ Responses bridge; `Metadata` propagation;
-`effort` → budget; `include: ["reasoning.encrypted_content"]`; `top_k`;
-alternation normalisation.
+- **The default `cache_control`.** `applyAnthropicCache` injects
+  `cache_control: ephemeral` whenever the IR `Cache` is nil, which reads as an
+  inverted default. It is not a bug: `TestAnthropicMessagesEncodeRequestDefaultsCacheOn`
+  pins it by name. Reversing it is a product decision about who pays for cache
+  writes, not a conformance fix, so it is left alone and recorded here.
+- **The `4096` default for Anthropic `max_tokens`.** Unlike the other two
+  protocols, Anthropic requires `max_tokens`, so a request that omits it cannot
+  be encoded at all without choosing a number. The value is still invented, but
+  only where the alternative is no request.
+- **Warning text appended to the system prompt / instructions.** The bridges
+  report what they could not translate by injecting a sentence into the model's
+  input. That is a pre-existing design choice with a real cost — it changes what
+  the model sees — and it is now used by one more case (stop sequences). A
+  caller-visible warning channel would be better.
 
-**Tier 5 — clarity.** Comment the deliberate workarounds (system-prompt
-stripping, forced-tool-choice downgrade, thinking-budget clamping, thinking
-suppression on unsigned tool continuations, signature-delta filtering) and
-consider making the invented defaults (4096 token limit, default
-`cache_control`, warning text blocks) opt-in rather than silent. The default
-`cache_control` is the most surprising: it is applied whenever the IR `Cache` is
-nil, so every bridged request is cache-marked unless the caller cannot express it.
+### 5.3 Still open
+
+- **Anthropic content-block decode coverage.** 9 of the 16 `ContentBlockParam`
+  variants and 8 of the 12 `ContentBlock` variants still have no `case` in
+  `decodeAnthropicContent`, so they are dropped. They are almost all server-tool
+  results (`web_search_tool_result`, `code_execution_tool_result`,
+  `container_upload`, …). The IR has no part type that can carry them, so
+  closing this needs an IR extension — a provider-defined part alongside the
+  existing `ToolProviderDefined` tool — rather than a decoder change. Worth
+  deciding deliberately.
+- **Responses output items.** `file_search_call`, `web_search_call` and
+  `computer_call` output items are still dropped on decode, as are annotations.
+- **A Chat ↔ Responses bridge.** Still absent; `NewCrossFamilyBridge` returns
+  `false` for that pair. The two protocols are close enough that this is the
+  largest remaining functional gap.
+- **Chat request coverage.** `metadata`, `logprobs`, `store`, the `name` field
+  and `role: "function"` are still not decoded.
+- **`n` and `stop` bounds.** `n` is documented as `1..128` and `stop` as at most
+  four sequences; neither is validated, so an out-of-range value reaches the
+  upstream as-is.
+- **`finish_reason` fallback.** An unrecognised finish reason still becomes
+  `stop` (Chat) / `end_turn` (Anthropic). Every value either protocol documents
+  now round-trips exactly; only unknown future values are affected.
 
 ---
 

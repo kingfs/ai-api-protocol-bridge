@@ -434,6 +434,34 @@ type openAIChatStreamEncoder struct {
 	toolIndexes map[string]int
 	toolNames   map[string]string
 	toolInputs  map[string]string
+	// blockToolIDs maps the block identifier a decoder emits on every part of a
+	// content block onto the provider's tool call id, which the protocol only
+	// states on the chunk that opens the call.
+	blockToolIDs map[string]string
+}
+
+// toolKey resolves the tool call a stream part belongs to. OpenAI states the
+// call id once, on the chunk that opens the call; the chunks that follow carry
+// only the index. A part that reaches this encoder with the block id and no
+// call id therefore still belongs to the call that block opened. Keying on the
+// call id alone opened a second tool call for every argument chunk, which split
+// one call into several and lost the function name on all but the first.
+func (e *openAIChatStreamEncoder) toolKey(part StreamPart) string {
+	if part.ToolCallID != "" {
+		if part.ID != "" {
+			if e.blockToolIDs == nil {
+				e.blockToolIDs = make(map[string]string)
+			}
+			e.blockToolIDs[part.ID] = part.ToolCallID
+		}
+		return part.ToolCallID
+	}
+	if part.ID != "" {
+		if callID, ok := e.blockToolIDs[part.ID]; ok {
+			return callID
+		}
+	}
+	return part.ID
 }
 
 func (e *openAIChatStreamEncoder) Encode(part StreamPart) ([]RawStreamEvent, error) {
@@ -462,15 +490,17 @@ func (e *openAIChatStreamEncoder) Encode(part StreamPart) ([]RawStreamEvent, err
 		chunk := openAIChatStreamChunk{Object: "chat.completion.chunk", Model: e.model, Created: e.timestamp(), Choices: []openAIChatStreamChoice{{Index: 0, Delta: &openAIChatStreamDelta{Reasoning: &reasoning}}}}
 		return singleOpenAIChatStreamEvent(chunk)
 	case StreamToolInputStart:
-		idx := e.ensureToolIndex(part.ToolCallID)
-		e.toolNames[part.ToolCallID] = part.ToolName
-		e.toolInputs[part.ToolCallID] = ""
-		tc := openAIChatStreamToolCall{Index: idx, ID: part.ToolCallID, Type: "function", Function: openAIChatStreamToolCallFunction{Name: part.ToolName}}
+		toolID := e.toolKey(part)
+		idx := e.ensureToolIndex(toolID)
+		e.toolNames[toolID] = part.ToolName
+		e.toolInputs[toolID] = ""
+		tc := openAIChatStreamToolCall{Index: idx, ID: toolID, Type: "function", Function: openAIChatStreamToolCallFunction{Name: part.ToolName}}
 		chunk := openAIChatStreamChunk{Object: "chat.completion.chunk", Model: e.model, Created: e.timestamp(), Choices: []openAIChatStreamChoice{{Index: 0, Delta: &openAIChatStreamDelta{ToolCalls: []openAIChatStreamToolCall{tc}}}}}
 		return singleOpenAIChatStreamEvent(chunk)
 	case StreamToolInputDelta:
-		idx := e.ensureToolIndex(part.ToolCallID)
-		e.toolInputs[part.ToolCallID] += part.Delta
+		toolID := e.toolKey(part)
+		idx := e.ensureToolIndex(toolID)
+		e.toolInputs[toolID] += part.Delta
 		tc := openAIChatStreamToolCall{Index: idx, Function: openAIChatStreamToolCallFunction{Arguments: part.Delta}}
 		chunk := openAIChatStreamChunk{Object: "chat.completion.chunk", Model: e.model, Created: e.timestamp(), Choices: []openAIChatStreamChoice{{Index: 0, Delta: &openAIChatStreamDelta{ToolCalls: []openAIChatStreamToolCall{tc}}}}}
 		return singleOpenAIChatStreamEvent(chunk)
@@ -523,10 +553,7 @@ func (e *openAIChatStreamEncoder) EncodeError(err error) []RawStreamEvent {
 }
 
 func (e *openAIChatStreamEncoder) encodeToolCall(part StreamPart) ([]RawStreamEvent, error) {
-	toolID := part.ToolCallID
-	if toolID == "" {
-		toolID = part.ID
-	}
+	toolID := e.toolKey(part)
 	idx := e.ensureToolIndex(toolID)
 	name := part.ToolName
 	if name == "" {

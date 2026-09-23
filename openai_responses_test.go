@@ -1491,6 +1491,7 @@ func TestOpenAIResponsesContentPartEventUsesThePartKey(t *testing.T) {
 		t.Fatalf("Encode(StreamTextStart) error = %v", err)
 	}
 	var added *openAIResponsesStreamEvent
+	var addedRaw []byte
 	for i := range raw {
 		var parsed openAIResponsesStreamEvent
 		if err := json.Unmarshal(raw[i].Data, &parsed); err != nil {
@@ -1498,6 +1499,7 @@ func TestOpenAIResponsesContentPartEventUsesThePartKey(t *testing.T) {
 		}
 		if parsed.Type == "response.content_part.added" {
 			added = &parsed
+			addedRaw = raw[i].Data
 		}
 	}
 	if added == nil {
@@ -1506,7 +1508,14 @@ func TestOpenAIResponsesContentPartEventUsesThePartKey(t *testing.T) {
 	if added.ContentPart == nil || added.ContentPart.Type != "output_text" {
 		t.Fatalf("content part = %+v", added.ContentPart)
 	}
-	if strings.Contains(string(raw[0].Data), `"content_part"`) {
-		t.Fatalf("event uses the undefined content_part key: %s", raw[0].Data)
+	// The event *name* is response.content_part.added; the member that carries
+	// the part is `part`. Emitting the member as `content_part` made the event
+	// unreadable to every client, and made our own decoder's
+	// response.content_part.added branch dead code.
+	if strings.Contains(string(addedRaw), `"content_part"`) {
+		t.Fatalf("event uses the undefined content_part member: %s", addedRaw)
+	}
+	if !strings.Contains(string(addedRaw), `"part"`) {
+		t.Fatalf("event carries no part member: %s", addedRaw)
 	}
 }

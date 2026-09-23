@@ -1,0 +1,1 @@
+{"model": "deepseek-flash", "input": "Call the get_weather tool for Paris. Use the tool, do not answer directly.", "tools": [{"type": "function", "name": "get_weather", "description": "Get weather for a city", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, "strict": false}], "stream": true, "max_output_tokens": 256}
