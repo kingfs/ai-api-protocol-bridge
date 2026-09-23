@@ -30,6 +30,7 @@ func (b openAIResponsesToAnthropicBridge) EncodeUpstreamRequest(req *LLMRequest,
 		Temperature:   req.Temperature,
 		StopSequences: req.StopSequences,
 		TopP:          req.TopP,
+		TopK:          req.TopK,
 		Tools:         encodeAnthropicTools(req.Tools),
 		Stream:        req.Stream,
 	}

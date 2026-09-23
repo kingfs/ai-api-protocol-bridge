@@ -105,6 +105,12 @@ func (a AnthropicMessagesAdapter) EncodeRequest(req *LLMRequest, opts EncodeRequ
 		request.Messages = append(request.Messages, encoded)
 	}
 
+	// `messages` is required by MessageCreateParams, so an empty prompt has no
+	// valid encoding; it used to serialise as `"messages": null`.
+	if len(request.Messages) == 0 {
+		return nil, errors.New("encode anthropic messages request: at least one message is required")
+	}
+
 	applyAnthropicCache(&request, req.Cache)
 	return json.Marshal(request)
 }
@@ -1104,13 +1110,29 @@ func encodeToolResultText(output ToolResultOutput) string {
 	return output.Text
 }
 
+// anthropicServerToolType matches Anthropic's server tool types, which always
+// carry a version suffix such as `web_search_20250305`.
+var anthropicServerToolType = regexp.MustCompile(`^[a-z][a-z0-9_]*_[0-9]{8}$`)
+
+// decodeAnthropicTools maps Anthropic's tool union onto the IR. Only the
+// `custom` branch is a function tool with a JSON Schema; every other branch is
+// a server side tool that Anthropic defines and runs itself. Twenty of the
+// union's twenty-one branches used to be dropped here, so an Anthropic request
+// re-encoded through the IR silently lost its server tools.
 func decodeAnthropicTools(tools []anthropicTool) []Tool {
 	decoded := make([]Tool, 0, len(tools))
 	for _, tool := range tools {
-		if tool.Type != "" && tool.Type != "custom" {
+		if tool.Type == "" || tool.Type == "custom" {
+			decoded = append(decoded, Tool{Type: ToolFunction, Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema, Strict: tool.Strict})
 			continue
 		}
-		decoded = append(decoded, Tool{Type: ToolFunction, Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema, Strict: tool.Strict})
+		config := make(map[string]any, len(tool.Raw))
+		for key, value := range tool.Raw {
+			config[key] = value
+		}
+		// The provider's own type name is the tool's identity, exactly as the
+		// OpenAI Responses adapter carries its server tools.
+		decoded = append(decoded, Tool{Type: ToolProviderDefined, Name: tool.Type, Config: config})
 	}
 	return decoded
 }
@@ -1118,19 +1140,70 @@ func decodeAnthropicTools(tools []anthropicTool) []Tool {
 func encodeAnthropicTools(tools []Tool) []anthropicTool {
 	encoded := make([]anthropicTool, 0, len(tools))
 	for _, tool := range tools {
-		if tool.Type != ToolFunction {
-			continue
+		switch tool.Type {
+		case ToolFunction:
+			encoded = append(encoded, anthropicTool{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema, Strict: tool.Strict})
+		case ToolProviderDefined:
+			// Anthropic accepts only its own server tool types. A provider tool
+			// from another family (an OpenAI `web_search_preview`, say) cannot
+			// be expressed in the union, so it is dropped rather than sent as a
+			// type Anthropic would reject; unsupportedAnthropicToolWarnings
+			// reports the same set to the caller.
+			if !anthropicServerToolType.MatchString(strings.TrimSpace(tool.Name)) {
+				continue
+			}
+			config := make(map[string]any, len(tool.Config)+2)
+			for key, value := range tool.Config {
+				config[key] = value
+			}
+			config["type"] = tool.Name
+			name, _ := config["name"].(string)
+			if name == "" {
+				name = anthropicServerToolName(tool.Name)
+				config["name"] = name
+			}
+			encoded = append(encoded, anthropicTool{Type: tool.Name, Name: name, Raw: config})
 		}
-		encoded = append(encoded, anthropicTool{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema, Strict: tool.Strict})
 	}
 	return encoded
 }
 
+// anthropicServerToolName is the name Anthropic expects for a server tool,
+// which is its type with the version suffix removed (`web_search_20250305` ->
+// `web_search`).
+func anthropicServerToolName(toolType string) string {
+	index := strings.LastIndex(toolType, "_")
+	if index <= 0 {
+		return toolType
+	}
+	suffix := toolType[index+1:]
+	if len(suffix) != 8 {
+		return toolType
+	}
+	for _, char := range suffix {
+		if char < '0' || char > '9' {
+			return toolType
+		}
+	}
+	return toolType[:index]
+}
+
+// unsupportedAnthropicToolWarnings reports the tools that cannot be expressed
+// in Anthropic's tool union. A plain function tool always can, and so can a
+// provider-defined tool whose name is an Anthropic server tool type; an OpenAI
+// Responses server tool such as "web_search" cannot, because the two providers
+// configure the same capability differently, so it is reported rather than sent
+// as a type Anthropic would reject.
 func unsupportedAnthropicToolWarnings(tools []Tool) []string {
 	warnings := make([]string, 0)
 	for _, tool := range tools {
-		if tool.Type == ToolFunction {
+		switch tool.Type {
+		case ToolFunction:
 			continue
+		case ToolProviderDefined:
+			if anthropicServerToolType.MatchString(strings.TrimSpace(tool.Name)) {
+				continue
+			}
 		}
 		name := strings.TrimSpace(tool.Name)
 		if name == "" {
@@ -1427,10 +1500,13 @@ type anthropicCacheControl struct {
 }
 
 type anthropicTool struct {
-	Type        string         `json:"type,omitempty"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"input_schema,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// InputSchema is required on a custom tool and must be an object, so it is
+	// never omitted; MarshalJSON substitutes an empty object, which accepts any
+	// input, when the IR carries no schema.
+	InputSchema map[string]any `json:"input_schema"`
 	Strict      *bool          `json:"strict,omitempty"`
 	Raw         map[string]any `json:"-"`
 }
@@ -1473,6 +1549,9 @@ func (t anthropicTool) MarshalJSON() ([]byte, error) {
 			config["strict"] = *t.Strict
 		}
 		return json.Marshal(config)
+	}
+	if t.InputSchema == nil {
+		t.InputSchema = map[string]any{}
 	}
 	type alias anthropicTool
 	return json.Marshal(struct {

@@ -30,6 +30,7 @@ func (b openAIChatToAnthropicBridge) EncodeUpstreamRequest(req *LLMRequest, opts
 		Temperature:   req.Temperature,
 		StopSequences: append([]string(nil), req.StopSequences...),
 		TopP:          req.TopP,
+		TopK:          req.TopK,
 		Tools:         encodeAnthropicTools(req.Tools),
 		Stream:        req.Stream,
 	}

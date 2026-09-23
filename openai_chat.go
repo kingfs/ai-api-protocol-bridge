@@ -101,6 +101,12 @@ func (a OpenAIChatAdapter) EncodeRequest(req *LLMRequest, opts EncodeRequestOpti
 		}
 		request.Messages = append(request.Messages, encoded...)
 	}
+	// `messages` is required and carries minItems: 1, so an empty prompt has no
+	// valid encoding. It used to serialise as `"messages": null`, which the
+	// upstream rejects with an error far less clear than this one.
+	if len(request.Messages) == 0 {
+		return nil, errors.New("encode openai chat request: at least one message is required")
+	}
 
 	return json.Marshal(request)
 }

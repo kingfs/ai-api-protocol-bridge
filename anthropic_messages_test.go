@@ -389,7 +389,7 @@ func TestAnthropicMessagesDecodeAdaptiveThinkingIgnoresOutputEffort(t *testing.T
 	}
 }
 
-func TestAnthropicMessagesDecodeFiltersNativeTools(t *testing.T) {
+func TestAnthropicMessagesDecodeKeepsNativeTools(t *testing.T) {
 	adapter := NewAnthropicMessagesAdapter()
 	req, err := adapter.DecodeRequest([]byte(`{
 		"model":"claude",
@@ -403,8 +403,31 @@ func TestAnthropicMessagesDecodeFiltersNativeTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeRequest() error = %v", err)
 	}
-	if len(req.Tools) != 1 || req.Tools[0].Name != "regular" {
+	// Anthropic's server side tools are part of the tool union, not noise to be
+	// filtered: dropping them here lost them on any re-encode. They are carried
+	// as provider-defined tools, keyed by the provider's own type name.
+	if len(req.Tools) != 2 {
 		t.Fatalf("Tools = %+v", req.Tools)
+	}
+	if req.Tools[0].Type != ToolProviderDefined || req.Tools[0].Name != "web_search_20250305" {
+		t.Fatalf("native tool = %+v", req.Tools[0])
+	}
+	if req.Tools[1].Type != ToolFunction || req.Tools[1].Name != "regular" {
+		t.Fatalf("function tool = %+v", req.Tools[1])
+	}
+	// The round trip must produce the same tool union member again.
+	raw, err := adapter.EncodeRequest(req, EncodeRequestOptions{Model: "claude"})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	var decoded struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(decoded.Tools) != 2 || decoded.Tools[0]["type"] != "web_search_20250305" || decoded.Tools[0]["name"] != "web_search" {
+		t.Fatalf("re-encoded tools = %+v", decoded.Tools)
 	}
 }
 
