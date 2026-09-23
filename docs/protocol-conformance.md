@@ -632,11 +632,53 @@ down from 11 (Anthropic), 21 (Responses) and 14 (Chat).
 
 ---
 
+## Calibration against live traffic
+
+The schemas say what a protocol allows. They do not say what a working
+implementation sends, and several conclusions above were wrong until real bytes
+corrected them. The fixtures in [`testdata/live/`](../testdata/live/README.md)
+are captures from a live multi-protocol gateway
+(`ai-api-gateway.app.baizhi.cloud`) driven with `deepseek-flash`, and
+[`live_calibration_test.go`](../live_calibration_test.go) replays them.
+
+That gateway is not this library — its chat endpoint is close to a pure
+passthrough and its Anthropic endpoint is its own conversion — so a fixture is
+evidence about the protocols rather than about us. What it settled:
+
+- **The Responses stream.** The event that carries a content part uses the
+  member `part`, not `content_part`; `response.function_call_arguments.done`
+  carries `arguments`; `response.output_item.done` is emitted; `output` is
+  nested inside `response`, not beside it; output items do not carry a `usage`
+  member. Each of these contradicted the pre-fix encoder, and all seven
+  discrepancies that a third-party client reported independently were confirmed
+  here.
+- **The Anthropic stream is strictly sequential.** `content_block_start index 0`
+  → deltas → `content_block_stop index 0` → `content_block_start index 1` → …
+  → `message_delta` → `message_stop`, with a single `ping` after
+  `message_start`. Our encoder emitted two `message_start` events and never
+  closed a block.
+- **`choices[].logprobs` and `reasoning_content` are ordinary.** Every chat
+  chunk in the capture carries `logprobs`, and the reasoning arrives
+  interleaved with the tool call rather than as a separate phase.
+
+The harness compares a stream's decode against the decode of its own
+re-encoding part by part, on the type, the deltas, the tool name and call id,
+the accumulated input and the finish reason. That comparison found a defect the
+report had missed: the chat encoder keyed tool state on the call id alone, but
+OpenAI states that id once and every later chunk carries only the index, so a
+part arriving with the block id and no call id opened a second tool call and
+lost the function name. It is fixed in `c0dd933`.
+
+---
+
 ## Reproducing the evidence
 
 ```bash
 # Conformance tests (the sandbox's default GOCACHE is read-only).
 GOCACHE=$PWD/.scratch/gocache go test -run 'TestOfficial|TestEncoded|TestAnthropicOfficial' -v .
+
+# Live-traffic calibration.
+GOCACHE=$PWD/.scratch/gocache go test -run 'TestLiveCaptured' -v .
 
 # Full suite.
 GOCACHE=$PWD/.scratch/gocache go test ./...
