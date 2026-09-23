@@ -325,8 +325,22 @@ func calculateTotalTokens(inputTokens, outputTokens *int) *int {
 	return &totalTokens
 }
 
+// positiveTokensOrNil drops a token limit the upstream would reject instead of
+// substituting one the caller never asked for. It is used wherever the target
+// protocol makes the limit optional: an unset limit stays unset, so the
+// upstream applies its own default rather than a fabricated one.
+func positiveTokensOrNil(value *int) *int {
+	if value == nil || *value < 1 {
+		return nil
+	}
+	return value
+}
+
+// maxOutputTokensOrDefault supplies a limit where the target protocol requires
+// the field to be present (Anthropic's `max_tokens`), so it can never be
+// omitted. Prefer positiveTokensOrNil where the field is optional.
 func maxOutputTokensOrDefault(value *int) *int {
-	if value != nil && *value >= 0 {
+	if value != nil && *value >= 1 {
 		return value
 	}
 	defaultValue := defaultMaxOutputTokens

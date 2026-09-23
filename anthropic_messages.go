@@ -47,7 +47,7 @@ func (a AnthropicMessagesAdapter) DecodeRequest(raw []byte) (*LLMRequest, error)
 		Protocol:              ProtocolAnthropicMessages,
 		Model:                 request.Model,
 		Prompt:                prompt,
-		MaxOutputTokens:       maxOutputTokensOrDefault(request.MaxTokens),
+		MaxOutputTokens:       request.MaxTokens,
 		Temperature:           request.Temperature,
 		StopSequences:         request.StopSequences,
 		TopP:                  request.TopP,

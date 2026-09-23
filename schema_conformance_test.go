@@ -190,12 +190,11 @@ func TestOfficialExampleRequestsReencodeWithinSchema(t *testing.T) {
 func TestEncodedResponsesWithinSchema(t *testing.T) {
 	cases := []schemaCase{
 		{
+			// Fixed: `created`, `choices[].logprobs`, `message.content` and
+			// `message.refusal` are all now emitted, and `usage` no longer
+			// serialises as an empty object.
 			name: "openai_chat", bundle: chatSchemaPath, slot: "response", adapter: NewOpenAIChatAdapter(),
-			wantProblems: []string{
-				"missing-required (root)/created",
-				"missing-required /choices/0/logprobs",
-				"missing-required /choices/0/message/refusal",
-			},
+			wantProblems: nil,
 		},
 		{
 			name: "openai_responses", bundle: responsesSchemaPath, slot: "response", adapter: NewOpenAIResponsesAdapter(),

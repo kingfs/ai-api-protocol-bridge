@@ -27,7 +27,7 @@ func (b anthropicToOpenAIResponsesBridge) EncodeUpstreamRequest(req *LLMRequest,
 
 	request := openAIResponsesRequest{
 		Model:             model,
-		MaxOutputTokens:   maxOutputTokensOrDefault(req.MaxOutputTokens),
+		MaxOutputTokens:   positiveTokensOrNil(req.MaxOutputTokens),
 		Temperature:       req.Temperature,
 		TopP:              req.TopP,
 		Text:              encodeOpenAIResponsesTextConfig(req.ResponseFormat),

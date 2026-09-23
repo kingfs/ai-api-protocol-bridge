@@ -321,7 +321,7 @@ func TestAnthropicMessagesEncodeRequestCacheFalse(t *testing.T) {
 	}
 }
 
-func TestAnthropicMessagesDecodeRequestDefaults(t *testing.T) {
+func TestAnthropicMessagesDecodeRequestWithoutMaxTokens(t *testing.T) {
 	adapter := NewAnthropicMessagesAdapter()
 	raw := []byte(`{"model":"claude","messages":[{"role":"user","content":"Hello"}]}`)
 
@@ -329,8 +329,10 @@ func TestAnthropicMessagesDecodeRequestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeRequest() error = %v", err)
 	}
-	if req.MaxOutputTokens == nil || *req.MaxOutputTokens != defaultMaxOutputTokens {
-		t.Fatalf("MaxOutputTokens = %v", req.MaxOutputTokens)
+	// An absent `max_tokens` stays absent in the IR; the encoder supplies the
+	// default only because Anthropic requires the field to be present.
+	if req.MaxOutputTokens != nil {
+		t.Fatalf("MaxOutputTokens = %v, want nil", *req.MaxOutputTokens)
 	}
 }
 

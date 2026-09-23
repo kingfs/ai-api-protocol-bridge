@@ -42,7 +42,7 @@ func (a OpenAIResponsesAdapter) DecodeRequest(raw []byte) (*LLMRequest, error) {
 		Protocol:          ProtocolOpenAIResponses,
 		Model:             request.Model,
 		Prompt:            prompt,
-		MaxOutputTokens:   maxOutputTokensOrDefault(request.MaxOutputTokens),
+		MaxOutputTokens:   request.MaxOutputTokens,
 		Temperature:       request.Temperature,
 		TopP:              request.TopP,
 		ResponseFormat:    decodeOpenAIResponsesTextConfig(request.Text),
@@ -73,7 +73,7 @@ func (a OpenAIResponsesAdapter) EncodeRequest(req *LLMRequest, opts EncodeReques
 
 	request := openAIResponsesRequest{
 		Model:             model,
-		MaxOutputTokens:   maxOutputTokensOrDefault(req.MaxOutputTokens),
+		MaxOutputTokens:   positiveTokensOrNil(req.MaxOutputTokens),
 		Temperature:       req.Temperature,
 		TopP:              req.TopP,
 		Text:              encodeOpenAIResponsesTextConfig(req.ResponseFormat),

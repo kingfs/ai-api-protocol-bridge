@@ -206,7 +206,7 @@ func TestOpenAIChatEncodeRequest(t *testing.T) {
 	}
 }
 
-func TestOpenAIChatEncodeRequestUsesDefaultForNegativeMaxTokens(t *testing.T) {
+func TestOpenAIChatEncodeRequestDropsNonPositiveMaxTokens(t *testing.T) {
 	adapter := NewOpenAIChatAdapter()
 	maxTokens := -1
 	req := &LLMRequest{
@@ -224,8 +224,11 @@ func TestOpenAIChatEncodeRequestUsesDefaultForNegativeMaxTokens(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if decoded["max_completion_tokens"] != float64(defaultMaxOutputTokens) {
-		t.Fatalf("max_completion_tokens = %v", decoded["max_completion_tokens"])
+	// A non-positive limit is not a limit: it is dropped rather than replaced
+	// with a fabricated 4096, which used to cap responses the caller had left
+	// uncapped.
+	if _, ok := decoded["max_completion_tokens"]; ok {
+		t.Fatalf("max_completion_tokens should be omitted: %+v", decoded)
 	}
 }
 
@@ -388,8 +391,14 @@ func TestOpenAIChatEncodeResponseRefusal(t *testing.T) {
 	if message["refusal"] != "I'm sorry, I cannot assist with that request." {
 		t.Fatalf("message = %+v", message)
 	}
-	if _, ok := message["content"]; ok {
-		t.Fatalf("content should be omitted: %+v", message)
+	// `content` is a required and nullable member of the response message, so a
+	// refusal-only message must carry it explicitly as null rather than drop it.
+	content, ok := message["content"]
+	if !ok {
+		t.Fatalf("content must be present: %+v", message)
+	}
+	if content != nil {
+		t.Fatalf("content = %v, want null", content)
 	}
 }
 
