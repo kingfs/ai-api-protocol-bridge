@@ -1304,3 +1304,110 @@ func TestAnthropicThinkingBudgetIsClampedToFitTheReply(t *testing.T) {
 		t.Fatalf("the reply cap was changed: %v", tinyEncoded["max_tokens"])
 	}
 }
+
+// TestAnthropicThinkingTokensMapToReasoningUsage pins the usage field the two
+// families account for differently. Anthropic reports reasoning as a breakdown
+// of the output tokens (usage.output_tokens_details.thinking_tokens); OpenAI
+// reports it as a counter of its own. Neither side read the other's field, so
+// the count was lost on every conversion in both directions even though all
+// three adapters already carried it in the IR.
+func TestAnthropicThinkingTokensMapToReasoningUsage(t *testing.T) {
+	adapter := NewAnthropicMessagesAdapter()
+
+	decoded, err := adapter.DecodeResponse([]byte(`{
+		"id":"msg_1","type":"message","role":"assistant","model":"claude",
+		"content":[{"type":"text","text":"hi"}],
+		"stop_reason":"end_turn",
+		"usage":{"input_tokens":10,"output_tokens":50,"output_tokens_details":{"thinking_tokens":7}}
+	}`))
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	if decoded.Usage.ReasoningTokens == nil {
+		t.Fatalf("thinking_tokens was dropped: %+v", decoded.Usage)
+	}
+	if *decoded.Usage.ReasoningTokens != 7 {
+		t.Fatalf("ReasoningTokens = %d, want 7", *decoded.Usage.ReasoningTokens)
+	}
+
+	// And back out again.
+	inputTokens, outputTokens, thinkingTokens := 10, 50, 7
+	raw, err := adapter.EncodeResponse(&LLMResponse{
+		ID: "msg_1", Model: "claude", Role: RoleAssistant, FinishReason: FinishStop,
+		Usage:   Usage{InputTokens: &inputTokens, OutputTokens: &outputTokens, ReasoningTokens: &thinkingTokens},
+		Content: []Part{{Type: PartText, Text: &TextPart{Text: "hi"}}},
+	}, EncodeResponseOptions{})
+	if err != nil {
+		t.Fatalf("EncodeResponse() error = %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	usage := encoded["usage"].(map[string]any)
+	details, ok := usage["output_tokens_details"].(map[string]any)
+	if !ok {
+		t.Fatalf("no output_tokens_details: %+v", usage)
+	}
+	if details["thinking_tokens"] != float64(7) {
+		t.Fatalf("thinking_tokens = %v, want 7", details["thinking_tokens"])
+	}
+}
+
+// TestAnthropicTopKSurvivesTheBridges pins a field the native encoder already
+// understood but that the two bridges encoding to Anthropic never copied: they
+// build their request by hand, and top_p was in the literal while top_k was not.
+func TestAnthropicTopKSurvivesTheBridges(t *testing.T) {
+	topK := 40
+	topP := 0.9
+	req := &LLMRequest{
+		Model:  "gpt-5.4",
+		Prompt: []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: &TextPart{Text: "Hello"}}}}},
+		TopK:   &topK,
+		TopP:   &topP,
+	}
+
+	// The adapter is the baseline the bridges have to match.
+	adapterRaw, err := NewAnthropicMessagesAdapter().EncodeRequest(req, EncodeRequestOptions{Model: "claude"})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	var adapterEncoded map[string]any
+	if err := json.Unmarshal(adapterRaw, &adapterEncoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if adapterEncoded["top_k"] != float64(topK) {
+		t.Fatalf("adapter top_k = %v, want %d", adapterEncoded["top_k"], topK)
+	}
+
+	for name, spec := range map[string]struct {
+		inbound Protocol
+		family  string
+	}{
+		"openai_chat":      {inbound: ProtocolOpenAIChat, family: FamilyAnthropic},
+		"openai_responses": {inbound: ProtocolOpenAIResponses, family: FamilyAnthropic},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bridge, ok := NewCrossFamilyBridge(spec.inbound, spec.family)
+			if !ok {
+				t.Fatal("NewCrossFamilyBridge() ok = false, want true")
+			}
+			request := *req
+			request.Protocol = spec.inbound
+			raw, err := bridge.EncodeUpstreamRequest(&request, EncodeRequestOptions{Model: "claude-sonnet"})
+			if err != nil {
+				t.Fatalf("EncodeUpstreamRequest() error = %v", err)
+			}
+			var encoded map[string]any
+			if err := json.Unmarshal(raw, &encoded); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if encoded["top_k"] != float64(topK) {
+				t.Fatalf("bridge top_k = %v, want %d: %s", encoded["top_k"], topK, raw)
+			}
+			if encoded["top_p"] != topP {
+				t.Fatalf("bridge top_p = %v, want %v", encoded["top_p"], topP)
+			}
+		})
+	}
+}
