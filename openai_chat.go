@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -240,8 +241,76 @@ type openAIChatStreamChunkUsage struct {
 	CompletionTokensDetails *openAICompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
 
+// openAIChatStreamDecoder turns chat completion chunks into stream parts.
+//
+// A chat completion chunk is a bare delta: it never announces that a content
+// block opened or that one closed. The IR stream protocol does have start and
+// end parts, and every encoder relies on them to emit a well formed target
+// stream (Responses needs `response.output_item.done`, Anthropic needs
+// `content_block_stop`), so the decoder synthesises them here: a block is
+// opened by the first delta that carries content for it and closed when the
+// choice reports a finish reason, or at Close for a stream that ends without
+// one. Block ids follow streamIndexID, so one choice's text, reasoning and tool
+// call share an id and are closed together in the order they were opened.
 type openAIChatStreamDecoder struct {
-	started bool
+	started   bool
+	openText  map[string]bool
+	openThink map[string]bool
+	openTools map[string]bool
+}
+
+// closeBlocks emits the end part for every block still open under id, oldest
+// first, and forgets them.
+func (d *openAIChatStreamDecoder) closeBlocks(id string, parts *[]StreamPart) {
+	if d.openThink[id] {
+		*parts = append(*parts, StreamPart{Type: StreamReasoningEnd, ID: id})
+		delete(d.openThink, id)
+	}
+	if d.openText[id] {
+		*parts = append(*parts, StreamPart{Type: StreamTextEnd, ID: id})
+		delete(d.openText, id)
+	}
+	if d.openTools[id] {
+		*parts = append(*parts, StreamPart{Type: StreamToolInputEnd, ID: id})
+		delete(d.openTools, id)
+	}
+}
+
+// closeAllBlocks is the Close-time sweep for a stream that never reported a
+// finish reason.
+func (d *openAIChatStreamDecoder) closeAllBlocks(parts *[]StreamPart) {
+	ids := make([]string, 0, len(d.openThink)+len(d.openText)+len(d.openTools))
+	for id := range d.openThink {
+		ids = append(ids, id)
+	}
+	for id := range d.openText {
+		if !d.openThink[id] {
+			ids = append(ids, id)
+		}
+	}
+	for id := range d.openTools {
+		if !d.openThink[id] && !d.openText[id] {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		d.closeBlocks(id, parts)
+	}
+}
+
+func (d *openAIChatStreamDecoder) startText(id string, parts *[]StreamPart) {
+	if !d.openText[id] {
+		d.openText[id] = true
+		*parts = append(*parts, StreamPart{Type: StreamTextStart, ID: id})
+	}
+}
+
+func (d *openAIChatStreamDecoder) startReasoning(id string, parts *[]StreamPart) {
+	if !d.openThink[id] {
+		d.openThink[id] = true
+		*parts = append(*parts, StreamPart{Type: StreamReasoningStart, ID: id})
+	}
 }
 
 func (d *openAIChatStreamDecoder) Decode(event RawStreamEvent) ([]StreamPart, error) {
@@ -257,7 +326,17 @@ func (d *openAIChatStreamDecoder) Decode(event RawStreamEvent) ([]StreamPart, er
 		return []StreamPart{{Type: StreamRaw, RawValue: string(event.Data)}}, nil
 	}
 
+	if d.openText == nil {
+		d.openText = make(map[string]bool)
+		d.openThink = make(map[string]bool)
+		d.openTools = make(map[string]bool)
+	}
+
 	parts := make([]StreamPart, 0)
+	// Exactly one StreamStart per stream. A chunk that carries delta.role used
+	// to produce a second one, which downstream encoders turned into a
+	// duplicate lifecycle event (two `message_start` events for one Anthropic
+	// response).
 	if !d.started {
 		d.started = true
 		part := StreamPart{Type: StreamStart, ID: chunk.ID, ProviderMetadata: map[string]any{"model": chunk.Model}}
@@ -277,27 +356,38 @@ func (d *openAIChatStreamDecoder) Decode(event RawStreamEvent) ([]StreamPart, er
 		if choice.Delta == nil {
 			continue
 		}
-		if choice.Delta.Role != "" {
-			parts = append(parts, StreamPart{Type: StreamStart, ID: chunk.ID, ProviderMetadata: map[string]any{"role": choice.Delta.Role}})
-		}
+		id := streamIndexID(choice.Index)
 		if choice.Delta.Reasoning != nil && *choice.Delta.Reasoning != "" {
-			parts = append(parts, StreamPart{Type: StreamReasoningDelta, ID: streamIndexID(choice.Index), Delta: *choice.Delta.Reasoning})
+			d.startReasoning(id, &parts)
+			parts = append(parts, StreamPart{Type: StreamReasoningDelta, ID: id, Delta: *choice.Delta.Reasoning})
 		}
 		if choice.Delta.Content != nil && *choice.Delta.Content != "" {
-			parts = append(parts, StreamPart{Type: StreamTextDelta, ID: streamIndexID(choice.Index), Delta: *choice.Delta.Content})
+			d.startText(id, &parts)
+			parts = append(parts, StreamPart{Type: StreamTextDelta, ID: id, Delta: *choice.Delta.Content})
 		}
 		if choice.Delta.Refusal != nil && *choice.Delta.Refusal != "" {
-			parts = append(parts, StreamPart{Type: StreamTextDelta, ID: streamIndexID(choice.Index), Delta: *choice.Delta.Refusal, ProviderMetadata: map[string]any{"refusal": true}})
+			d.startText(id, &parts)
+			parts = append(parts, StreamPart{Type: StreamTextDelta, ID: id, Delta: *choice.Delta.Refusal, ProviderMetadata: map[string]any{"refusal": true}})
 		}
 		for _, tc := range choice.Delta.ToolCalls {
+			toolID := streamIndexID(tc.Index)
 			if tc.ID != "" {
-				parts = append(parts, StreamPart{Type: StreamToolInputStart, ID: streamIndexID(tc.Index), ToolCallID: tc.ID, ToolName: tc.Function.Name})
+				if !d.openTools[toolID] {
+					d.openTools[toolID] = true
+					parts = append(parts, StreamPart{Type: StreamToolInputStart, ID: toolID, ToolCallID: tc.ID, ToolName: tc.Function.Name})
+				}
+			} else if tc.Function.Arguments != "" && !d.openTools[toolID] {
+				// Argument-only chunks are the norm after the first one, so a
+				// provider that never repeats the id still gets one open block.
+				d.openTools[toolID] = true
+				parts = append(parts, StreamPart{Type: StreamToolInputStart, ID: toolID, ToolName: tc.Function.Name})
 			}
 			if tc.Function.Arguments != "" {
-				parts = append(parts, StreamPart{Type: StreamToolInputDelta, ID: streamIndexID(tc.Index), ToolCallID: tc.ID, Delta: tc.Function.Arguments})
+				parts = append(parts, StreamPart{Type: StreamToolInputDelta, ID: toolID, ToolCallID: tc.ID, Delta: tc.Function.Arguments})
 			}
 		}
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
+			d.closeBlocks(id, &parts)
 			parts = append(parts, StreamPart{Type: StreamFinish, FinishReason: decodeOpenAIFinishReason(*choice.FinishReason)})
 		}
 	}
@@ -318,8 +408,12 @@ func (d *openAIChatStreamDecoder) Decode(event RawStreamEvent) ([]StreamPart, er
 	return parts, nil
 }
 
+// Close flushes any block a stream left open, so an aborted or unterminated
+// chat stream still produces a balanced IR stream.
 func (d *openAIChatStreamDecoder) Close() ([]StreamPart, error) {
-	return nil, nil
+	parts := make([]StreamPart, 0)
+	d.closeAllBlocks(&parts)
+	return parts, nil
 }
 
 type openAIChatStreamEncoder struct {

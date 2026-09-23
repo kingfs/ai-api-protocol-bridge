@@ -464,7 +464,10 @@ func TestOpenAIChatStreamDecoder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode(role) error = %v", err)
 	}
-	if len(parts) < 1 || parts[0].Type != StreamStart {
+	// The role chunk opens the stream exactly once. It used to emit a second
+	// StreamStart, which downstream encoders turned into a duplicate lifecycle
+	// event such as a second `message_start`.
+	if len(parts) != 1 || parts[0].Type != StreamStart {
 		t.Fatalf("role parts = %+v", parts)
 	}
 
@@ -473,7 +476,9 @@ func TestOpenAIChatStreamDecoder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode(content) error = %v", err)
 	}
-	if len(parts) != 1 || parts[0].Type != StreamTextDelta || parts[0].Delta != content {
+	// A chat chunk is a bare delta, so the decoder opens the text block that
+	// the delta belongs to before forwarding it.
+	if len(parts) != 2 || parts[0].Type != StreamTextStart || parts[1].Type != StreamTextDelta || parts[1].Delta != content {
 		t.Fatalf("content parts = %+v", parts)
 	}
 
@@ -481,7 +486,9 @@ func TestOpenAIChatStreamDecoder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decode(finish) error = %v", err)
 	}
-	if len(parts) != 1 || parts[0].Type != StreamFinish || parts[0].FinishReason != FinishStop {
+	// The finish reason closes every block the choice left open, then ends the
+	// stream, so an encoder can always emit a balanced target stream.
+	if len(parts) != 2 || parts[0].Type != StreamTextEnd || parts[1].Type != StreamFinish || parts[1].FinishReason != FinishStop {
 		t.Fatalf("finish parts = %+v", parts)
 	}
 
