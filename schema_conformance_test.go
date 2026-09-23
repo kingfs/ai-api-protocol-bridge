@@ -205,20 +205,12 @@ func TestEncodedResponsesWithinSchema(t *testing.T) {
 			wantProblems: nil,
 		},
 		{
+			// Fixed: the Message envelope now carries container, stop_details,
+			// stop_sequence and a complete usage object, a text block carries
+			// the citations array and a tool_use block the caller the schema
+			// requires.
 			name: "anthropic_messages", bundle: anthropicSchemaPath, slot: "response", adapter: NewAnthropicMessagesAdapter(),
-			wantProblems: []string{
-				"missing-required (root)/container",
-				"missing-required (root)/stop_details",
-				"missing-required (root)/stop_sequence",
-				"missing-required /usage/cache_creation",
-				"missing-required /usage/cache_creation_input_tokens",
-				"missing-required /usage/inference_geo",
-				"missing-required /usage/output_tokens_details",
-				"missing-required /usage/server_tool_use",
-				"missing-required /usage/service_tier",
-				"no-branch /content/0 anyOf",
-				"no-branch /content/2 anyOf",
-			},
+			wantProblems: nil,
 		},
 	}
 	runResponseSchemaCases(t, cases)

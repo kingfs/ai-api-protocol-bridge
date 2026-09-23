@@ -570,7 +570,7 @@ func (e *anthropicStreamEncoder) encodeFinish(part StreamPart) []RawStreamEvent 
 			"stop_reason":   encodeAnthropicStopReason(part.FinishReason),
 			"stop_sequence": nil,
 		},
-		"usage": usage,
+		"usage": anthropicMessageDeltaUsageFor(usage),
 	}
 	deltaEvent, err := singleAnthropicStreamPayloadEvent("message_delta", payload)
 	if err == nil {
@@ -765,7 +765,7 @@ func encodeAnthropicContent(parts []Part) []anthropicContentBlock {
 		switch part.Type {
 		case PartText:
 			if part.Text != nil {
-				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: part.Text.Text})
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: part.Text.Text, Citations: []any{}})
 			}
 		case PartReasoning:
 			if part.Reasoning != nil {
@@ -777,7 +777,7 @@ func encodeAnthropicContent(parts []Part) []anthropicContentBlock {
 			}
 		case PartRefusal:
 			if part.Refusal != nil {
-				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: part.Refusal.Text})
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: part.Refusal.Text, Citations: []any{}})
 			}
 		case PartFile:
 			if part.File != nil {
@@ -789,7 +789,10 @@ func encodeAnthropicContent(parts []Part) []anthropicContentBlock {
 			}
 		case PartToolCall:
 			if part.ToolCall != nil {
-				blocks = append(blocks, anthropicContentBlock{Type: "tool_use", ID: part.ToolCall.ToolCallID, Name: part.ToolCall.ToolName, Input: part.ToolCall.Input})
+				// ToolUseBlock requires a caller; the model invoking the tool
+				// itself is the `direct` caller, which is also the documented
+				// default.
+				blocks = append(blocks, anthropicContentBlock{Type: "tool_use", ID: part.ToolCall.ToolCallID, Name: part.ToolCall.ToolName, Input: part.ToolCall.Input, Caller: map[string]any{"type": "direct"}})
 			}
 		case PartToolResult:
 			if part.ToolResult != nil {
@@ -1275,21 +1278,52 @@ func firstRefusalText(parts []Part) string {
 }
 
 func decodeAnthropicUsage(usage anthropicUsage) Usage {
-	return Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CachedInputTokens: usage.CacheReadInputTokens, CacheCreationInputTokens: usage.CacheCreationInputTokens, CacheReadInputTokens: usage.CacheReadInputTokens}
+	decoded := Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CachedInputTokens: usage.CacheReadInputTokens, CacheCreationInputTokens: usage.CacheCreationInputTokens, CacheReadInputTokens: usage.CacheReadInputTokens}
+	// Anthropic reports reasoning usage as a breakdown of the output tokens;
+	// dropping it lost the count on every Anthropic to OpenAI conversion.
+	if usage.OutputTokensDetails != nil {
+		decoded.ReasoningTokens = usage.OutputTokensDetails.ThinkingTokens
+	}
+	return decoded
 }
 
 func encodeAnthropicUsage(usage Usage, billingUsage BillingUsage) anthropicUsage {
-	if hasBillingUsage(billingUsage) {
-		inputTokens := clampNonNegative(billingUsage.InputTokens - intValue(usage.CacheCreationInputTokens))
-		cachedInputTokens := billingUsage.CachedInputTokens
-		outputTokens := billingUsage.OutputTokens
-		return anthropicUsage{InputTokens: &inputTokens, OutputTokens: &outputTokens, CacheCreationInputTokens: usage.CacheCreationInputTokens, CacheReadInputTokens: &cachedInputTokens}
-	}
+	inputTokens := intValue(usage.InputTokens)
+	outputTokens := intValue(usage.OutputTokens)
 	cacheReadTokens := usage.CacheReadInputTokens
 	if cacheReadTokens == nil {
 		cacheReadTokens = usage.CachedInputTokens
 	}
-	return anthropicUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CacheCreationInputTokens: usage.CacheCreationInputTokens, CacheReadInputTokens: cacheReadTokens}
+	if hasBillingUsage(billingUsage) {
+		inputTokens = clampNonNegative(billingUsage.InputTokens - intValue(usage.CacheCreationInputTokens))
+		cachedInputTokens := billingUsage.CachedInputTokens
+		cacheReadTokens = &cachedInputTokens
+		outputTokens = billingUsage.OutputTokens
+	}
+	encoded := anthropicUsage{
+		InputTokens:              intPtr(inputTokens),
+		OutputTokens:             intPtr(outputTokens),
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     cacheReadTokens,
+	}
+	// The Anthropic equivalent of the IR's reasoning token count is the
+	// thinking token count of the output.
+	if usage.ReasoningTokens != nil {
+		encoded.OutputTokensDetails = &anthropicOutputTokenDetails{ThinkingTokens: usage.ReasoningTokens}
+	}
+	return encoded
+}
+
+// anthropicMessageDeltaUsageFor narrows the full Message usage to what a
+// message_delta event reports.
+func anthropicMessageDeltaUsageFor(usage anthropicUsage) anthropicMessageDeltaUsage {
+	return anthropicMessageDeltaUsage{
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
+		OutputTokensDetails:      usage.OutputTokensDetails,
+	}
 }
 
 type anthropicRequest struct {
@@ -1366,7 +1400,12 @@ func (m *anthropicMessage) UnmarshalJSON(raw []byte) error {
 }
 
 type anthropicContentBlock struct {
-	Type         string                 `json:"type"`
+	Type string `json:"type"`
+	// Citations is `any` so that an explicitly empty array survives omitempty:
+	// TextBlock requires the member, while encoding/json would drop an empty
+	// slice.
+	Citations    any                    `json:"citations,omitempty"`
+	Caller       any                    `json:"caller,omitempty"`
 	Text         string                 `json:"text,omitempty"`
 	Thinking     string                 `json:"thinking,omitempty"`
 	Data         string                 `json:"data,omitempty"`
@@ -1459,14 +1498,21 @@ type anthropicOutputFormat struct {
 }
 
 type anthropicResponse struct {
-	ID          string                  `json:"id,omitempty"`
-	Type        string                  `json:"type"`
-	Role        string                  `json:"role"`
-	Model       string                  `json:"model"`
-	Content     []anthropicContentBlock `json:"content"`
-	StopReason  string                  `json:"stop_reason,omitempty"`
-	StopDetails *anthropicStopDetails   `json:"stop_details,omitempty"`
-	Usage       anthropicUsage          `json:"usage,omitempty"`
+	ID      string                  `json:"id"`
+	Type    string                  `json:"type"`
+	Role    string                  `json:"role"`
+	Model   string                  `json:"model"`
+	Content []anthropicContentBlock `json:"content"`
+	// Container, stop_details and stop_sequence are all required by the Message
+	// schema and are nullable, so an unset value is reported as null instead of
+	// the member being dropped. The IR has no representation for a container
+	// (server side skills) or for refusal details beyond what stop_details
+	// already carries.
+	Container    any                   `json:"container"`
+	StopReason   string                `json:"stop_reason"`
+	StopSequence *string               `json:"stop_sequence"`
+	StopDetails  *anthropicStopDetails `json:"stop_details"`
+	Usage        anthropicUsage        `json:"usage"`
 }
 
 type anthropicStopDetails struct {
@@ -1475,11 +1521,43 @@ type anthropicStopDetails struct {
 	Explanation string `json:"explanation,omitempty"`
 }
 
+// anthropicUsage is the Usage object of a Message. The schema marks all nine
+// members as required, and only input_tokens and output_tokens are numbers, so
+// an unknown count is reported as null while those two fall back to zero.
 type anthropicUsage struct {
-	InputTokens              *int `json:"input_tokens,omitempty"`
-	OutputTokens             *int `json:"output_tokens,omitempty"`
-	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitempty"`
+	InputTokens              *int                         `json:"input_tokens"`
+	OutputTokens             *int                         `json:"output_tokens"`
+	CacheCreation            *anthropicCacheCreation      `json:"cache_creation"`
+	CacheCreationInputTokens *int                         `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int                         `json:"cache_read_input_tokens"`
+	OutputTokensDetails      *anthropicOutputTokenDetails `json:"output_tokens_details"`
+	ServerToolUse            any                          `json:"server_tool_use"`
+	InferenceGeo             *string                      `json:"inference_geo"`
+	ServiceTier              *string                      `json:"service_tier"`
+}
+
+// anthropicCacheCreation breaks cached tokens down by TTL. The IR records only
+// the total, so the breakdown is reported as null rather than split
+// arbitrarily.
+type anthropicCacheCreation struct {
+	Ephemeral1hInputTokens *int `json:"ephemeral_1h_input_tokens"`
+	Ephemeral5mInputTokens *int `json:"ephemeral_5m_input_tokens"`
+}
+
+type anthropicOutputTokenDetails struct {
+	ThinkingTokens *int `json:"thinking_tokens"`
+}
+
+// anthropicMessageDeltaUsage is the Usage of a message_delta event. It is a
+// separate type from the Message usage: the delta stream cannot know the cache
+// write breakdown, and the schema gives the event its own member set.
+type anthropicMessageDeltaUsage struct {
+	InputTokens              *int                         `json:"input_tokens"`
+	OutputTokens             *int                         `json:"output_tokens"`
+	CacheCreationInputTokens *int                         `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int                         `json:"cache_read_input_tokens"`
+	OutputTokensDetails      *anthropicOutputTokenDetails `json:"output_tokens_details"`
+	ServerToolUse            any                          `json:"server_tool_use"`
 }
 
 type anthropicStreamEvent struct {
