@@ -283,6 +283,12 @@ func TestLiveCapturedStreamsRoundTrip(t *testing.T) {
 				}
 			}
 
+			// Lifecycle balance is protocol independent: one stream-start, and
+			// every block that opened also closed. The defects this harness was
+			// built to catch included a stream that never closed a block and one
+			// that opened a second block before closing the first.
+			assertStreamLifecycleBalanced(t, parts)
+
 			// A chat stream chunk requires `created`, and a zero there is a
 			// real value the protocol does not allow anyone to mean.
 			if fixture.name == "openai_chat" {
@@ -348,6 +354,51 @@ func projectStreamParts(parts []StreamPart) []liveStreamProjection {
 		})
 	}
 	return projected
+}
+
+// assertStreamLifecycleBalanced checks that a decoded stream describes complete
+// content blocks: exactly one stream-start, and a matching end part for every
+// start part, in the order that keeps at most one block open at a time.
+func assertStreamLifecycleBalanced(t *testing.T, parts []StreamPart) {
+	t.Helper()
+
+	blockOf := map[StreamPartType]StreamPartType{
+		StreamTextStart:      StreamTextEnd,
+		StreamReasoningStart: StreamReasoningEnd,
+		StreamToolInputStart: StreamToolInputEnd,
+	}
+	endOf := map[StreamPartType]StreamPartType{
+		StreamTextEnd:      StreamTextStart,
+		StreamReasoningEnd: StreamReasoningStart,
+		StreamToolInputEnd: StreamToolInputStart,
+	}
+
+	starts := 0
+	open := map[StreamPartType]int{}
+	for _, part := range parts {
+		if part.Type == StreamStart {
+			starts++
+			continue
+		}
+		if end, ok := blockOf[part.Type]; ok {
+			open[end]++
+			continue
+		}
+		if start, ok := endOf[part.Type]; ok {
+			if open[part.Type] == 0 {
+				t.Fatalf("%s with no matching %s", part.Type, start)
+			}
+			open[part.Type]--
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("a stream must start exactly once, got %d: %+v", starts, parts)
+	}
+	for end, count := range open {
+		if count != 0 {
+			t.Fatalf("%d %s blocks were never closed", count, end)
+		}
+	}
 }
 
 // assertBalancedAnthropicEvents checks the stream level invariants a client
