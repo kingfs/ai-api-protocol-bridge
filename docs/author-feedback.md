@@ -1,5 +1,12 @@
 # 给作者的问题反馈（通俗版）
 
+> **状态更新：本文提到的编码器问题已经全部修好了。** 修复按批次落在
+> `fix/protocol-conformance` 分支上，逐条对应关系、以及哪些是**故意不改**的
+> （比如默认开启 `cache_control`，它有测试钉着，是产品决定不是 bug）和哪些
+> 还**没做**（Anthropic 那 9 种 content block 的解码要扩 IR），都记在
+> [protocol-conformance.md 的 §5](protocol-conformance.md#5-remediation-status)。
+> 下面保留原文，作为当时问题的记录。
+
 这份东西是给这个库的作者看的，尽量少讲术语，重点讲**"用户会看到什么症状"**。
 技术细节和逐字段核对在 [protocol-conformance.md](protocol-conformance.md)，
 官方 schema 标准在 [protocols/](../protocols/README.md)。
