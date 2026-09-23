@@ -362,6 +362,11 @@ type anthropicStreamEncoder struct {
 	toolInputs   map[string]string
 	started      bool
 	finished     bool
+	// openIndex is the content block that is currently open, if any. Anthropic
+	// delivers content blocks strictly one at a time, so a content_block_start
+	// for a new index must be preceded by a content_block_stop for the previous
+	// one.
+	openIndex *int
 }
 
 func (e *anthropicStreamEncoder) Encode(part StreamPart) ([]RawStreamEvent, error) {
@@ -395,105 +400,117 @@ func (e *anthropicStreamEncoder) Encode(part StreamPart) ([]RawStreamEvent, erro
 		}
 		return singleAnthropicStreamPayloadEvent("message_start", payload)
 	case StreamTextStart:
-		idx := e.ensureIndex(e.activeText, part.ID)
-		payload := map[string]any{
-			"type":  "content_block_start",
-			"index": idx,
-			"content_block": map[string]any{
-				"type": "text",
-				"text": "",
-			},
-		}
-		return singleAnthropicStreamPayloadEvent("content_block_start", payload)
+		_, events := e.ensureBlock(e.activeText, part.ID, anthropicTextBlock())
+		return events, nil
 	case StreamTextDelta:
-		idx := e.ensureIndex(e.activeText, part.ID)
+		idx, events := e.ensureBlock(e.activeText, part.ID, anthropicTextBlock())
 		delta := anthropicStreamDelta{Type: "text_delta", Text: part.Delta}
-		return singleAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})
+		events = append(events, mustAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})...)
+		return events, nil
 	case StreamTextEnd:
-		idx, key, ok := e.existingIndexAndKey(e.activeText, part.ID)
-		if !ok {
+		return e.stopBlock(e.activeText, part.ID), nil
+	case StreamReasoningStart:
+		block := anthropicThinkingBlock(part)
+		_, events := e.ensureBlock(e.activeReason, part.ID, block)
+		return events, nil
+	case StreamReasoningDelta:
+		if redacted, ok := part.ProviderMetadata["redacted"].(bool); ok && redacted {
+			// A redacted thinking block carries its payload in
+			// content_block_start, and the delta union has no member for it:
+			// `redacted_thinking_delta` is not part of the protocol.
 			return nil, nil
 		}
-		delete(e.activeText, key)
-		return singleAnthropicStreamEvent("content_block_stop", anthropicStreamEvent{Type: "content_block_stop", Index: intPtr(idx)})
-	case StreamReasoningStart:
-		idx := e.ensureIndex(e.activeReason, part.ID)
-		blockType := "thinking"
-		if redacted, ok := part.ProviderMetadata["redacted"].(bool); ok && redacted {
-			blockType = "redacted_thinking"
-		}
-		block := map[string]any{"type": blockType}
-		if blockType == "redacted_thinking" {
-			block["data"] = part.Delta
-		} else {
-			block["thinking"] = ""
-			block["signature"] = ""
-		}
-		payload := map[string]any{
-			"type":          "content_block_start",
-			"index":         idx,
-			"content_block": block,
-		}
-		return singleAnthropicStreamPayloadEvent("content_block_start", payload)
-	case StreamReasoningDelta:
-		idx := e.ensureIndex(e.activeReason, part.ID)
-		if redacted, ok := part.ProviderMetadata["redacted"].(bool); ok && redacted {
-			delta := anthropicStreamDelta{Type: "redacted_thinking_delta", Text: part.Delta}
-			return singleAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})
+		idx, events := e.ensureBlock(e.activeReason, part.ID, anthropicThinkingBlock(part))
+		if part.Delta != "" {
+			delta := anthropicStreamDelta{Type: "thinking_delta", Thinking: part.Delta}
+			events = append(events, mustAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})...)
 		}
 		if signature, ok := part.ProviderMetadata["signature"].(string); ok && signature != "" {
 			delta := anthropicStreamDelta{Type: "signature_delta", Signature: signature}
-			return singleAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})
+			events = append(events, mustAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})...)
 		}
-		delta := anthropicStreamDelta{Type: "thinking_delta", Thinking: part.Delta}
-		return singleAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})
+		return events, nil
 	case StreamReasoningEnd:
-		idx, key, ok := e.existingIndexAndKey(e.activeReason, part.ID)
-		if !ok {
-			return nil, nil
-		}
-		delete(e.activeReason, key)
-		return singleAnthropicStreamEvent("content_block_stop", anthropicStreamEvent{Type: "content_block_stop", Index: intPtr(idx)})
+		return e.stopBlock(e.activeReason, part.ID), nil
 	case StreamToolInputStart:
-		idx := e.ensureIndex(e.activeTool, part.ToolCallID)
-		e.toolNames[part.ToolCallID] = part.ToolName
-		block := anthropicContentBlock{Type: "tool_use", ID: part.ToolCallID, Name: part.ToolName, Input: map[string]any{}}
-		return singleAnthropicStreamEvent("content_block_start", anthropicStreamEvent{Type: "content_block_start", Index: intPtr(idx), ContentBlock: &block})
+		key := anthropicToolBlockKey(part)
+		e.toolNames[key] = part.ToolName
+		_, events := e.ensureBlock(e.activeTool, key, anthropicToolUseBlock(part.ToolCallID, part.ToolName))
+		return events, nil
 	case StreamToolInputDelta:
-		idx := e.ensureIndex(e.activeTool, part.ToolCallID)
-		e.toolInputs[part.ToolCallID] += part.Delta
+		key := anthropicToolBlockKey(part)
+		idx, events := e.ensureBlock(e.activeTool, key, anthropicToolUseBlock(part.ToolCallID, e.toolNames[key]))
+		e.toolInputs[key] += part.Delta
 		delta := anthropicStreamDelta{Type: "input_json_delta", PartialJSON: part.Delta}
-		return singleAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})
+		events = append(events, mustAnthropicStreamEvent("content_block_delta", anthropicStreamEvent{Type: "content_block_delta", Index: intPtr(idx), Delta: &delta})...)
+		return events, nil
 	case StreamToolInputEnd:
-		idx, key, ok := e.existingIndexAndKey(e.activeTool, part.ToolCallID)
-		if !ok && part.ID != part.ToolCallID {
-			idx, key, ok = e.existingIndexAndKey(e.activeTool, part.ID)
-		}
-		if !ok {
-			return nil, nil
-		}
-		delete(e.activeTool, key)
-		return singleAnthropicStreamEvent("content_block_stop", anthropicStreamEvent{Type: "content_block_stop", Index: intPtr(idx)})
+		return e.stopBlock(e.activeTool, anthropicToolBlockKey(part)), nil
 	case StreamToolCall:
 		return e.encodeToolCall(part)
 	case StreamFinish:
 		e.finished = true
-		return e.encodeFinish(part), nil
+		return append(e.closeOpenBlock(), e.encodeFinish(part)...), nil
 	case StreamError:
 		return singleAnthropicStreamEvent("error", anthropicStreamEvent{Type: "error", Error: part.Error})
 	case StreamRaw:
-		delta := anthropicStreamDelta{Type: "raw", Text: fmt.Sprint(part.RawValue)}
-		return singleAnthropicStreamEvent("raw", anthropicStreamEvent{Type: "raw", Delta: &delta})
+		// The Anthropic stream vocabulary has no raw passthrough event, and
+		// `raw` is not a member of the delta union either, so a raw part is
+		// dropped rather than turned into an event a client cannot parse.
+		return nil, nil
 	default:
 		return nil, nil
 	}
 }
 
+// anthropicToolBlockKey is the key a tool call's content block is registered
+// under. Every decoder sets ID to the block's stream index and only fills in
+// ToolCallID when the upstream repeats it, so keying on ID keeps the start, the
+// deltas and the end on one block; keying on ToolCallID alone opened a second
+// block for each argument-only chunk.
+func anthropicToolBlockKey(part StreamPart) string {
+	if part.ID != "" {
+		return part.ID
+	}
+	return part.ToolCallID
+}
+
+func anthropicTextBlock() map[string]any {
+	return map[string]any{"type": "text", "text": ""}
+}
+
+func anthropicThinkingBlock(part StreamPart) map[string]any {
+	if redacted, ok := part.ProviderMetadata["redacted"].(bool); ok && redacted {
+		return map[string]any{"type": "redacted_thinking", "data": part.Delta}
+	}
+	return map[string]any{"type": "thinking", "thinking": "", "signature": ""}
+}
+
+func anthropicToolUseBlock(id, name string) map[string]any {
+	return map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{}}
+}
+
+// mustAnthropicStreamEvent marshals a single Anthropic SSE event. The payloads
+// built here hold only plain JSON values, so a marshal error cannot occur; the
+// error return exists for the parts whose payload comes from elsewhere.
+func mustAnthropicStreamEvent(event string, payload anthropicStreamEvent) []RawStreamEvent {
+	events, err := singleAnthropicStreamEvent(event, payload)
+	if err != nil {
+		return nil
+	}
+	return events
+}
+
+// Close terminates a stream that ended without a finish part. It closes any
+// content block still open - the encoder used to leave it dangling, so a client
+// waited for a content_block_stop that never came - and then finishes.
 func (e *anthropicStreamEncoder) Close() ([]RawStreamEvent, error) {
 	if e.finished {
 		return nil, nil
 	}
-	return e.encodeFinish(StreamPart{Type: StreamFinish, FinishReason: FinishStop}), nil
+	e.finished = true
+	events := append(e.closeOpenBlock(), e.encodeFinish(StreamPart{Type: StreamFinish, FinishReason: FinishStop})...)
+	return events, nil
 }
 
 func (e *anthropicStreamEncoder) EncodeError(err error) []RawStreamEvent {
@@ -564,6 +581,68 @@ func (e *anthropicStreamEncoder) encodeFinish(part StreamPart) []RawStreamEvent 
 		events = append(events, stopEvent...)
 	}
 	return events
+}
+
+// closeOpenBlock emits content_block_stop for the block that is currently open,
+// if there is one.
+func (e *anthropicStreamEncoder) closeOpenBlock() []RawStreamEvent {
+	if e.openIndex == nil {
+		return nil
+	}
+	index := *e.openIndex
+	e.openIndex = nil
+	return mustAnthropicStreamEvent("content_block_stop", anthropicStreamEvent{Type: "content_block_stop", Index: intPtr(index)})
+}
+
+// startBlock makes index the open block, first stopping whatever was open
+// before it, because Anthropic never has two content blocks open at once.
+func (e *anthropicStreamEncoder) startBlock(index int) []RawStreamEvent {
+	if e.openIndex != nil && *e.openIndex == index {
+		return nil
+	}
+	prefix := e.closeOpenBlock()
+	open := index
+	e.openIndex = &open
+	return prefix
+}
+
+// ensureBlock resolves the content block for id, opening it when it is not
+// known yet. When block is non-nil it becomes the content_block payload of a
+// lazily emitted content_block_start, so a delta that arrives without a
+// matching start still lands inside a block the client has been told about. The
+// returned events must be emitted before any delta for this block.
+func (e *anthropicStreamEncoder) ensureBlock(indexes map[string]int, id string, block map[string]any) (int, []RawStreamEvent) {
+	if index, _, ok := e.existingIndexAndKey(indexes, id); ok {
+		return index, e.startBlock(index)
+	}
+	index := e.ensureIndex(indexes, id)
+	events := e.startBlock(index)
+	if block == nil {
+		return index, events
+	}
+	payload, err := singleAnthropicStreamPayloadEvent("content_block_start", map[string]any{
+		"type":          "content_block_start",
+		"index":         index,
+		"content_block": block,
+	})
+	if err == nil {
+		events = append(events, payload...)
+	}
+	return index, events
+}
+
+// stopBlock closes the content block registered under id, but only when it is
+// the one currently open.
+func (e *anthropicStreamEncoder) stopBlock(indexes map[string]int, id string) []RawStreamEvent {
+	index, key, ok := e.existingIndexAndKey(indexes, id)
+	if !ok {
+		return nil
+	}
+	delete(indexes, key)
+	if e.openIndex == nil || *e.openIndex != index {
+		return nil
+	}
+	return e.closeOpenBlock()
 }
 
 func (e *anthropicStreamEncoder) ensureIndex(indexes map[string]int, id string) int {

@@ -979,12 +979,14 @@ func TestAnthropicInboundOpenAIResponsesUpstreamStreamBridge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode(tool start) error = %v", err)
 	}
-	var toolStart anthropicStreamEvent
-	if err := json.Unmarshal(toolStartEvents[0].Data, &toolStart); err != nil {
-		t.Fatalf("json.Unmarshal(toolStart) error = %v", err)
-	}
+	// Opening a tool block closes the thinking block that was still open, so
+	// the content_block_start is not necessarily the first event returned.
+	toolStart := anthropicContentBlockStartEvent(t, toolStartEvents)
 	if toolStart.ContentBlock == nil || toolStart.ContentBlock.Type != "tool_use" || toolStart.ContentBlock.Name != "get_weather" {
 		t.Fatalf("toolStart = %+v", toolStart)
+	}
+	if stopped := firstAnthropicContentBlockStop(toolStartEvents); stopped == nil || stopped.Index == nil || *stopped.Index != 0 {
+		t.Fatalf("the thinking block should be stopped before the tool block starts: %+v", toolStartEvents)
 	}
 
 	parts, err = decoder.Decode(RawStreamEvent{Event: "response.function_call_arguments.delta", Data: []byte(`{"type":"response.function_call_arguments.delta","delta":"{\"city\":\"Shanghai\"}"}`)})
@@ -1011,11 +1013,14 @@ func TestAnthropicInboundOpenAIResponsesUpstreamStreamBridge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode(finish) error = %v", err)
 	}
-	var finish anthropicStreamEvent
-	if err := json.Unmarshal(finishEvents[0].Data, &finish); err != nil {
-		t.Fatalf("json.Unmarshal(finish) error = %v", err)
+	// The tool block was still open, so the finish stops it before the
+	// message_delta.
+	finishEvent := findAnthropicStreamEvent(finishEvents, "message_delta")
+	if finishEvent == nil {
+		t.Fatalf("no message_delta in %+v", finishEvents)
 	}
-	if finish.Type != "message_delta" || finish.Usage == nil || finish.Usage.InputTokens == nil || *finish.Usage.InputTokens != 10 {
+	finish := *finishEvent
+	if finish.Usage == nil || finish.Usage.InputTokens == nil || *finish.Usage.InputTokens != 10 {
 		t.Fatalf("finish = %+v", finish)
 	}
 	if finish.Usage.CacheCreationInputTokens == nil || *finish.Usage.CacheCreationInputTokens != 3 || finish.Usage.CacheReadInputTokens == nil || *finish.Usage.CacheReadInputTokens != 4 || finish.Usage.OutputTokens == nil || *finish.Usage.OutputTokens != 5 {
@@ -1453,4 +1458,50 @@ func TestOpenAIChatInboundAnthropicUpstreamStreamBridge(t *testing.T) {
 	if summary.Usage.PromptTokensDetails == nil || summary.Usage.PromptTokensDetails.CachedTokens == nil || *summary.Usage.PromptTokensDetails.CachedTokens != 4 {
 		t.Fatalf("summary cached tokens = %+v", summary.Usage)
 	}
+}
+
+// anthropicContentBlockStartEvent returns the content_block_start event among
+// the events an encoder produced.
+func anthropicContentBlockStartEvent(t *testing.T, events []RawStreamEvent) anthropicStreamEvent {
+	t.Helper()
+	for _, raw := range events {
+		var event anthropicStreamEvent
+		if err := json.Unmarshal(raw.Data, &event); err != nil {
+			t.Fatalf("json.Unmarshal(%s) error = %v", raw.Data, err)
+		}
+		if raw.Event == "content_block_start" {
+			return event
+		}
+	}
+	t.Fatalf("no content_block_start in %+v", events)
+	return anthropicStreamEvent{}
+}
+
+// findAnthropicStreamEvent returns the first event of the given type.
+func findAnthropicStreamEvent(events []RawStreamEvent, eventType string) *anthropicStreamEvent {
+	for _, raw := range events {
+		if raw.Event != eventType {
+			continue
+		}
+		var event anthropicStreamEvent
+		if err := json.Unmarshal(raw.Data, &event); err != nil {
+			continue
+		}
+		return &event
+	}
+	return nil
+}
+
+func firstAnthropicContentBlockStop(events []RawStreamEvent) *anthropicStreamEvent {
+	for _, raw := range events {
+		if raw.Event != "content_block_stop" {
+			continue
+		}
+		var event anthropicStreamEvent
+		if err := json.Unmarshal(raw.Data, &event); err != nil {
+			continue
+		}
+		return &event
+	}
+	return nil
 }
