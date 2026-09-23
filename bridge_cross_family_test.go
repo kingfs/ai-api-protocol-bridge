@@ -1595,3 +1595,121 @@ func TestAnthropicInboundChatUpstreamStreamLifecycle(t *testing.T) {
 		t.Fatalf("a content block was never closed: %v", sequence)
 	}
 }
+
+// TestAnthropicTargetBridgesCarryReasoningEffort pins the bridge path, which
+// builds its Anthropic request by hand and therefore has to pass the reasoning
+// level through on its own. The adapter was fixed to convert the level into a
+// thinking budget; without this the two bridges kept dropping it, because the
+// level never reached the helper they share.
+func TestAnthropicTargetBridgesCarryReasoningEffort(t *testing.T) {
+	bridges := map[string]struct {
+		inbound Protocol
+		family  string
+	}{
+		"openai_chat":      {inbound: ProtocolOpenAIChat, family: FamilyAnthropic},
+		"openai_responses": {inbound: ProtocolOpenAIResponses, family: FamilyAnthropic},
+	}
+
+	for name, spec := range bridges {
+		t.Run(name, func(t *testing.T) {
+			bridge, ok := NewCrossFamilyBridge(spec.inbound, spec.family)
+			if !ok {
+				t.Fatal("NewCrossFamilyBridge() ok = false, want true")
+			}
+
+			budgets := make([]float64, 0, 3)
+			for _, level := range []string{"low", "medium", "high"} {
+				enabled := true
+				req := &LLMRequest{
+					Protocol:        spec.inbound,
+					Model:           "gpt-5.4",
+					Prompt:          []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: &TextPart{Text: "Hello"}}}}},
+					Reasoning:       &enabled,
+					ReasoningEffort: level,
+				}
+				raw, err := bridge.EncodeUpstreamRequest(req, EncodeRequestOptions{Model: "claude-sonnet"})
+				if err != nil {
+					t.Fatalf("EncodeUpstreamRequest(%s) error = %v", level, err)
+				}
+				var encoded map[string]any
+				if err := json.Unmarshal(raw, &encoded); err != nil {
+					t.Fatalf("json.Unmarshal() error = %v", err)
+				}
+				thinking, ok := encoded["thinking"].(map[string]any)
+				if !ok {
+					t.Fatalf("effort %q produced no thinking block: %s", level, raw)
+				}
+				budget, ok := thinking["budget_tokens"].(float64)
+				if !ok {
+					t.Fatalf("thinking has no budget_tokens: %+v", thinking)
+				}
+				budgets = append(budgets, budget)
+			}
+
+			if !(budgets[0] < budgets[1] && budgets[1] < budgets[2]) {
+				t.Fatalf("the reasoning level does not change the thinking budget: %v", budgets)
+			}
+		})
+	}
+}
+
+// TestAnthropicTargetBridgesOptIntoPromptCaching pins the other half of the
+// cache contract. The adapter is a codec and now stays faithful to the tri-state
+// Cache flag, but neither OpenAI protocol has a field for prompt caching, so an
+// OpenAI-inbound request can never set it. The bridge makes the call on the
+// client's behalf, explicitly, and this test is what keeps that from being lost
+// again the next time someone reads a nil as "no".
+func TestAnthropicTargetBridgesOptIntoPromptCaching(t *testing.T) {
+	bridges := map[string]struct {
+		inbound Protocol
+		family  string
+	}{
+		"openai_chat":      {inbound: ProtocolOpenAIChat, family: FamilyAnthropic},
+		"openai_responses": {inbound: ProtocolOpenAIResponses, family: FamilyAnthropic},
+	}
+
+	for name, spec := range bridges {
+		t.Run(name, func(t *testing.T) {
+			bridge, ok := NewCrossFamilyBridge(spec.inbound, spec.family)
+			if !ok {
+				t.Fatal("NewCrossFamilyBridge() ok = false, want true")
+			}
+
+			req := &LLMRequest{
+				Protocol: spec.inbound,
+				Model:    "gpt-5.4",
+				Prompt:   []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: &TextPart{Text: "Hello"}}}}},
+			}
+			raw, err := bridge.EncodeUpstreamRequest(req, EncodeRequestOptions{Model: "claude-sonnet"})
+			if err != nil {
+				t.Fatalf("EncodeUpstreamRequest() error = %v", err)
+			}
+			var encoded map[string]any
+			if err := json.Unmarshal(raw, &encoded); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			messages := encoded["messages"].([]any)
+			content := messages[0].(map[string]any)["content"].([]any)
+			if _, ok := content[0].(map[string]any)["cache_control"]; !ok {
+				t.Fatalf("the bridge stopped marking the request for caching: %s", raw)
+			}
+
+			// An explicit false from the caller still wins.
+			disabled := false
+			req.Cache = &disabled
+			raw, err = bridge.EncodeUpstreamRequest(req, EncodeRequestOptions{Model: "claude-sonnet"})
+			if err != nil {
+				t.Fatalf("EncodeUpstreamRequest() error = %v", err)
+			}
+			var disabledEncoded map[string]any
+			if err := json.Unmarshal(raw, &disabledEncoded); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			messages = disabledEncoded["messages"].([]any)
+			content = messages[0].(map[string]any)["content"].([]any)
+			if _, ok := content[0].(map[string]any)["cache_control"]; ok {
+				t.Fatalf("Cache: false did not stop the bridge from marking the request: %s", raw)
+			}
+		})
+	}
+}

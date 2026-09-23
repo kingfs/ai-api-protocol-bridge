@@ -258,27 +258,50 @@ func TestAnthropicMessagesDecodeBlockCacheControl(t *testing.T) {
 	}
 }
 
-func TestAnthropicMessagesEncodeRequestDefaultsCacheOn(t *testing.T) {
+// TestAnthropicMessagesEncodeRequestCacheIsOptIn pins the adapter's contract: a
+// request that says nothing about caching gets no cache marker. Cache is a
+// *bool so that "unset" and "off" differ, and the encoder used to treat unset
+// as "on" - every request it produced carried cache_control, which costs more
+// on a cache write than the caller had agreed to.
+func TestAnthropicMessagesEncodeRequestCacheIsOptIn(t *testing.T) {
 	adapter := NewAnthropicMessagesAdapter()
-	req := &LLMRequest{
-		Model:  "claude",
-		Prompt: []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: &TextPart{Text: "Hello"}}}}},
+
+	encode := func(t *testing.T, cache *bool) map[string]any {
+		t.Helper()
+		req := &LLMRequest{
+			Model:  "claude",
+			Prompt: []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: &TextPart{Text: "Hello"}}}}},
+			Cache:  cache,
+		}
+		raw, err := adapter.EncodeRequest(req, EncodeRequestOptions{Model: "claude"})
+		if err != nil {
+			t.Fatalf("EncodeRequest() error = %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		if _, ok := decoded["cache_control"]; ok {
+			t.Fatalf("top-level cache_control should be omitted: %+v", decoded)
+		}
+		return decoded
 	}
 
-	raw, err := adapter.EncodeRequest(req, EncodeRequestOptions{Model: "claude"})
-	if err != nil {
-		t.Fatalf("EncodeRequest() error = %v", err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
-	if _, ok := decoded["cache_control"]; ok {
-		t.Fatalf("top-level cache_control should be omitted: %+v", decoded)
-	}
-	messages := decoded["messages"].([]any)
+	unset := encode(t, nil)
+	messages := unset["messages"].([]any)
 	content := messages[0].(map[string]any)["content"].([]any)
-	cacheControl := content[0].(map[string]any)["cache_control"].(map[string]any)
+	if _, ok := content[0].(map[string]any)["cache_control"]; ok {
+		t.Fatalf("an unset Cache enabled caching: %+v", content[0])
+	}
+
+	enabled := true
+	optedIn := encode(t, &enabled)
+	messages = optedIn["messages"].([]any)
+	content = messages[0].(map[string]any)["content"].([]any)
+	cacheControl, ok := content[0].(map[string]any)["cache_control"].(map[string]any)
+	if !ok {
+		t.Fatalf("Cache: true produced no cache marker: %+v", content[0])
+	}
 	if cacheControl["type"] != "ephemeral" {
 		t.Fatalf("cache_control = %+v", cacheControl)
 	}
@@ -1049,8 +1072,11 @@ func TestReasoningConvertsAcrossProtocols(t *testing.T) {
 	if err := json.Unmarshal(anthropicRaw, &anthropicDecoded); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
+	// Anthropic has no effort field, so "medium" has to arrive as a budget. It
+	// used to arrive as the same budget as every other level, which made the
+	// level meaningless.
 	thinking := anthropicDecoded["thinking"].(map[string]any)
-	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(defaultThinkingBudgetTokens) {
+	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(2048) {
 		t.Fatalf("anthropic thinking = %+v", thinking)
 	}
 
@@ -1071,7 +1097,10 @@ func TestReasoningConvertsAcrossProtocols(t *testing.T) {
 	if err := json.Unmarshal(chatRaw, &chatDecoded); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if chatDecoded["reasoning_effort"] != "medium" {
+	// The budget the Anthropic client named reads back as the level it means.
+	// It used to report whatever the boolean fallback produced, so 1024 and
+	// 16384 both came out as the same level.
+	if chatDecoded["reasoning_effort"] != "low" {
 		t.Fatalf("chat reasoning_effort = %v", chatDecoded["reasoning_effort"])
 	}
 
@@ -1084,7 +1113,7 @@ func TestReasoningConvertsAcrossProtocols(t *testing.T) {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 	reasoning := responsesDecoded["reasoning"].(map[string]any)
-	if reasoning["effort"] != "medium" {
+	if reasoning["effort"] != "low" {
 		t.Fatalf("responses reasoning = %+v", reasoning)
 	}
 }
@@ -1159,5 +1188,119 @@ func TestAnthropicMessagesEncodeDocumentsUseStableSources(t *testing.T) {
 	xlsWarning := content[3].(map[string]any)
 	if xlsWarning["type"] != "text" || !strings.Contains(xlsWarning["text"].(string), "sheet.xls") {
 		t.Fatalf("xls warning = %+v", xlsWarning)
+	}
+}
+
+// TestReasoningEffortRoundTripsThroughAnthropicBudget pins the one field that
+// carries a reasoning level in each direction. OpenAI names a level
+// (reasoning_effort); Anthropic names a token budget (thinking.budget_tokens)
+// and has no level at all. Neither side was reading the other's field: every
+// level encoded to the same budget, and every budget decoded to the same level.
+func TestReasoningEffortRoundTripsThroughAnthropicBudget(t *testing.T) {
+	adapter := NewAnthropicMessagesAdapter()
+	levels := []string{"low", "medium", "high"}
+	budgets := make([]float64, 0, len(levels))
+
+	for _, level := range levels {
+		t.Run(level, func(t *testing.T) {
+			enabled := true
+			req := &LLMRequest{
+				Model:           "claude",
+				Prompt:          []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: &TextPart{Text: "Hello"}}}}},
+				Reasoning:       &enabled,
+				ReasoningEffort: level,
+			}
+			raw, err := adapter.EncodeRequest(req, EncodeRequestOptions{Model: "claude"})
+			if err != nil {
+				t.Fatalf("EncodeRequest() error = %v", err)
+			}
+			var encoded map[string]any
+			if err := json.Unmarshal(raw, &encoded); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			thinking, ok := encoded["thinking"].(map[string]any)
+			if !ok {
+				t.Fatalf("no thinking block for effort %q: %s", level, raw)
+			}
+			budget, ok := thinking["budget_tokens"].(float64)
+			if !ok {
+				t.Fatalf("thinking has no budget_tokens: %+v", thinking)
+			}
+			budgets = append(budgets, budget)
+
+			// The budget has to read back as the level it came from, or the
+			// conversion is lossy in a way no schema can see.
+			decoded, err := adapter.DecodeRequest(raw)
+			if err != nil {
+				t.Fatalf("DecodeRequest() error = %v", err)
+			}
+			if decoded.ReasoningEffort != level {
+				t.Fatalf("effort round trip: encoded %q as a budget of %v, decoded %q", level, budget, decoded.ReasoningEffort)
+			}
+		})
+	}
+
+	// The levels must be ordered, not merely distinct.
+	if len(budgets) == 3 {
+		if !(budgets[0] < budgets[1] && budgets[1] < budgets[2]) {
+			t.Fatalf("effort budgets are not increasing with the level: %v", budgets)
+		}
+	}
+}
+
+// TestAnthropicThinkingBudgetIsClampedToFitTheReply pins the behaviour when the
+// requested reasoning budget does not leave room for a reply. Anthropic rejects
+// a budget that is not strictly below max_tokens; the encoder used to drop the
+// thinking block instead, which silently switched reasoning off because the
+// reply cap happened to be small.
+func TestAnthropicThinkingBudgetIsClampedToFitTheReply(t *testing.T) {
+	adapter := NewAnthropicMessagesAdapter()
+
+	clamped := 2048
+	enabled := true
+	req := &LLMRequest{
+		Model:           "claude",
+		Prompt:          []Message{{Role: RoleUser, Parts: []Part{{Type: PartText, Text: &TextPart{Text: "Hello"}}}}},
+		MaxOutputTokens: &clamped,
+		Reasoning:       &enabled,
+		ReasoningEffort: "high",
+	}
+	raw, err := adapter.EncodeRequest(req, EncodeRequestOptions{Model: "claude"})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	var encoded map[string]any
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	thinking, ok := encoded["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking was dropped rather than clamped: %s", raw)
+	}
+	budget := thinking["budget_tokens"].(float64)
+	if budget >= float64(clamped) {
+		t.Fatalf("budget_tokens %v is not below max_tokens %d", budget, clamped)
+	}
+	if budget < float64(minAnthropicThinkingBudgetTokens) {
+		t.Fatalf("budget_tokens %v is below Anthropic's minimum", budget)
+	}
+
+	// With no room for even the minimum budget there is no legal encoding, so
+	// the thinking block is omitted and the request still goes out.
+	tiny := 1024
+	req.MaxOutputTokens = &tiny
+	raw, err = adapter.EncodeRequest(req, EncodeRequestOptions{Model: "claude"})
+	if err != nil {
+		t.Fatalf("EncodeRequest() error = %v", err)
+	}
+	var tinyEncoded map[string]any
+	if err := json.Unmarshal(raw, &tinyEncoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if _, ok := tinyEncoded["thinking"]; ok {
+		t.Fatalf("thinking survived a max_tokens of %d: %s", tiny, raw)
+	}
+	if tinyEncoded["max_tokens"] != float64(tiny) {
+		t.Fatalf("the reply cap was changed: %v", tinyEncoded["max_tokens"])
 	}
 }

@@ -87,7 +87,7 @@ func (a AnthropicMessagesAdapter) EncodeRequest(req *LLMRequest, opts EncodeRequ
 		Metadata:      encodeAnthropicMetadata(req.Metadata),
 	}
 	request.OutputConfig = encodeAnthropicOutputConfig(req.ResponseFormat)
-	request.Thinking = encodeAnthropicThinking(req.Reasoning, req.ReasoningBudgetTokens, request.MaxTokens)
+	request.Thinking = encodeAnthropicThinking(req.Reasoning, req.ReasoningEffort, req.ReasoningBudgetTokens, request.MaxTokens)
 	request.ToolChoice = encodeAnthropicToolChoice(sanitizeAnthropicToolChoice(req.ToolChoice, request.Thinking), req.ParallelToolCalls)
 
 	for _, message := range req.Prompt {
@@ -946,7 +946,8 @@ func decodeAnthropicReasoningEffort(thinking any) string {
 		return ""
 	}
 	var decoded struct {
-		Type string `json:"type"`
+		Type         string `json:"type"`
+		BudgetTokens *int   `json:"budget_tokens"`
 	}
 	if err := json.Unmarshal(asRawMessage(thinking), &decoded); err != nil {
 		return ""
@@ -956,20 +957,50 @@ func decodeAnthropicReasoningEffort(thinking any) string {
 		return "high"
 	case "disabled":
 		return "none"
-	default:
-		return ""
+	case "enabled":
+		// An enabled thinking block states its level as a token budget and
+		// nothing else. Reading only the type dropped the level: every enabled
+		// block became the same effort, whether it asked for 1024 tokens or
+		// 16384.
+		if decoded.BudgetTokens != nil {
+			return mapReasoningBudgetToOpenAIEffort(*decoded.BudgetTokens)
+		}
 	}
+	return ""
 }
 
-func encodeAnthropicThinking(reasoning *bool, budgetTokens *int, maxTokens *int) any {
+func encodeAnthropicThinking(reasoning *bool, effort string, budgetTokens *int, maxTokens *int) any {
 	if reasoning == nil || !*reasoning {
 		return nil
 	}
-	budget := anthropicThinkingBudgetTokens(budgetTokens, maxTokens)
+	budget := anthropicThinkingBudgetTokens(effort, budgetTokens, maxTokens)
 	if budget == nil {
 		return nil
 	}
 	return map[string]any{"type": "enabled", "budget_tokens": budget}
+}
+
+// anthropicThinkingBudgetForEffort turns an OpenAI reasoning level into the
+// thinking budget that expresses it. Anthropic has no effort field at all - the
+// only knob is `budget_tokens` - so a level that is not converted here is lost:
+// the client asked for a little reasoning or a lot and got the same amount
+// either way. The bands are the inverse of mapReasoningBudgetToOpenAIEffort, so
+// a level survives effort -> budget -> effort, and all of them sit below
+// defaultMaxOutputTokens so that they fit a request that named no cap of its
+// own.
+func anthropicThinkingBudgetForEffort(effort string) *int {
+	var budget int
+	switch normalizeOpenAIReasoningEffort(effort) {
+	case "low":
+		budget = 1024
+	case "medium":
+		budget = 2048
+	case "high":
+		budget = 3072
+	default:
+		return nil
+	}
+	return &budget
 }
 
 func decodeAnthropicCache(request anthropicRequest) *bool {
@@ -984,6 +1015,19 @@ func decodeAnthropicCache(request anthropicRequest) *bool {
 		}
 	}
 	return nil
+}
+
+// anthropicCachePreference decides what an OpenAI-inbound request means for
+// Anthropic prompt caching. Neither OpenAI protocol has a field for it, so the
+// client can never say yes; the bridge, whose purpose is to serve the same
+// conversation more cheaply, opts in on its behalf and says so here rather than
+// relying on a nil that also means "the caller did not say".
+func anthropicCachePreference(cache *bool) *bool {
+	if cache != nil {
+		return cache
+	}
+	enabled := true
+	return &enabled
 }
 
 func anthropicContentHasCacheControl(content any) bool {
@@ -1002,8 +1046,16 @@ func anthropicContentHasCacheControl(content any) bool {
 	return false
 }
 
+// applyAnthropicCache marks the request for prompt caching. It applies only
+// when the caller asked for it.
+//
+// Cache is a *bool precisely so that "unset" and "off" are different states,
+// and treating unset as "on" silently changed the request - and its billing,
+// since a cache write costs more than an uncached read - for every caller that
+// never mentioned caching. A bridge whose inbound protocol has no cache field
+// at all passes an explicit true instead; see anthropicCachePreference.
 func applyAnthropicCache(request *anthropicRequest, cache *bool) {
-	if request == nil || (cache != nil && !*cache) {
+	if request == nil || cache == nil || !*cache {
 		return
 	}
 	cacheControl := &anthropicCacheControl{Type: "ephemeral"}
@@ -1081,16 +1133,27 @@ func encodeAnthropicOutputConfig(format *ResponseFormat) *anthropicOutputConfig 
 	return &anthropicOutputConfig{Format: &anthropicOutputFormat{Type: "json_schema", Schema: format.Schema, Strict: format.Strict}}
 }
 
-func anthropicThinkingBudgetTokens(budgetTokens *int, maxTokens *int) *int {
+func anthropicThinkingBudgetTokens(effort string, budgetTokens *int, maxTokens *int) *int {
 	maxOutputTokens := defaultMaxOutputTokens
 	if maxTokens != nil && *maxTokens > 0 {
 		maxOutputTokens = *maxTokens
 	}
 	budget := defaultThinkingBudgetTokens
 	if budgetTokens != nil {
+		// An explicit budget is the caller's own number and wins over the
+		// level, which is only a way of naming one.
 		budget = *budgetTokens
+	} else if fromEffort := anthropicThinkingBudgetForEffort(effort); fromEffort != nil {
+		budget = *fromEffort
 	}
-	if budget < minAnthropicThinkingBudgetTokens || budget >= maxOutputTokens {
+	// Thinking has to leave room for a reply: Anthropic rejects a budget that
+	// is not strictly below max_tokens. Shrinking to the largest legal budget
+	// keeps the feature the client asked for; it used to be dropped outright,
+	// which silently turned reasoning off because the reply cap was small.
+	if budget >= maxOutputTokens {
+		budget = maxOutputTokens - 1
+	}
+	if budget < minAnthropicThinkingBudgetTokens {
 		return nil
 	}
 	return &budget

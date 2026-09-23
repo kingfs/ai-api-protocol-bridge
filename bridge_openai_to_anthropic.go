@@ -6,7 +6,7 @@ func encodeAnthropicThinkingForOpenAIInbound(req *LLMRequest, maxTokens *int) an
 	if req == nil {
 		return nil
 	}
-	thinking := encodeAnthropicThinking(req.Reasoning, req.ReasoningBudgetTokens, maxTokens)
+	thinking := encodeAnthropicThinking(req.Reasoning, req.ReasoningEffort, req.ReasoningBudgetTokens, maxTokens)
 	if thinking == nil {
 		return nil
 	}

@@ -440,10 +440,12 @@ func encodeOpenAIResponsesReasoningConfig(req *LLMRequest) any {
 // ReasoningEffort, so the largest budget maps to "high".
 func mapReasoningBudgetToOpenAIEffort(budget int) string {
 	switch {
-	case budget >= 4096:
+	case budget >= 3072:
 		return "high"
-	default:
+	case budget >= 2048:
 		return "medium"
+	default:
+		return "low"
 	}
 }
 

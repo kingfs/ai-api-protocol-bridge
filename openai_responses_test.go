@@ -329,8 +329,10 @@ func TestOpenAIResponsesEncodeRequestMapsReasoningBudgetToEffort(t *testing.T) {
 		budget int
 		effort string
 	}{
-		{name: "medium", budget: 1024, effort: "medium"},
-		{name: "high", budget: 4096, effort: "high"},
+		// Anthropic's minimum thinking budget is the smallest reasoning effort.
+		{name: "low", budget: 1024, effort: "low"},
+		{name: "medium", budget: 2048, effort: "medium"},
+		{name: "high", budget: 3072, effort: "high"},
 		// "xhigh" is not a member of the schema's ReasoningEffort enum, so the
 		// largest budget reports the largest legal level instead.
 		{name: "largest budget clamps to high", budget: 8192, effort: "high"},
