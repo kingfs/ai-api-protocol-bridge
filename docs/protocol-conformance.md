@@ -501,18 +501,18 @@ adapter only); response state into Responses.
 | `refusal` | Anthropic gains `stop_details`; Chat has no equivalent, and in a Chat stream a refusal arrives as a plain text delta with metadata |
 | finish reasons | unknown values collapse to `stop` (Chat) or `end_turn` (Anthropic); Responses content filtering is `status:"completed"` non-streamed but `response.incomplete` streamed |
 | reasoning text → Anthropic | unsigned reasoning is dropped; only signed/redacted survives |
-| reasoning budget ↔ effort | budget→effort is quantised (`>=8192` → the out-of-enum `xhigh`); effort→budget does not exist and defaults to 1024; Chat flattens effort to a boolean and always re-emits `medium` |
+| reasoning budget ↔ effort | quantised both ways (`low`/`medium`/`high` ↔ `1024`/`2048`/`3072`), so a budget that is not one of those three bands reads back as the nearest level; **fixed** in `411ba15` |
 | forced / named tool choice with thinking | silently downgraded to `auto` |
 | strict tool schemas → Responses | `additionalProperties` is forced to `false` and `required` is rewritten to every property, mutating the declared schema |
-| prompt caching → Anthropic | only presence round-trips; placement and TTL are lost, and a marker is applied at a fixed position |
-| token limits | absent limits are invented as 4096 on every path |
+| prompt caching → Anthropic | only presence round-trips; placement and TTL are lost, and the marker goes at one fixed position (last system block, else last message block) rather than the up-to-four breakpoints Anthropic allows |
+| token limits | an absent limit is invented as 4096 for an Anthropic target only, where `max_tokens` is required; the other two protocols omit it. A thinking budget too large for the reply cap is clamped down to fit rather than dropped |
 | `max_tokens` naming | Chat decode prefers `max_completion_tokens`, encode emits only it |
 | tool-result JSON and error flags | JSON-ness is stringified; `is_error` exists only in Anthropic |
 | usage / cache accounting | cache-write tokens are folded into `prompt_tokens` for Chat, and emitted as a non-standard `cache_write_tokens` for Responses |
 | streamed usage | rebased per direction; cache-write visibility is lost |
-| timestamps | Chat stream chunks always report `created: 0` |
-| Responses item identity | non-stream `function_call` items omit `id`; the IR has no item-ID slot for tool calls |
-| Anthropic `stop_sequence` | not modelled in the IR at all |
+| timestamps | a Chat response and its chunks share one real `created` value; **fixed** in `360db99` |
+| Responses item identity | the IR has no item-ID slot for tool calls, so a streamed item is renumbered (`fc_1`, `fc_2`, …) on re-encode; the call ID itself is preserved |
+| Anthropic `stop_sequence` | modelled and emitted; the IR records the stop reason but not which sequence matched, so the value is `null` |
 
 ### 4.4 Not expressible in the target protocol
 
@@ -523,25 +523,29 @@ adapter only); response state into Responses.
 3. `presence_penalty`, `frequency_penalty`, `seed` → **Anthropic** and
    **Responses**.
 4. `top_k` → **Chat** and **Responses**.
-5. `stop` sequences → **Responses** (no field). Note the adapter-level hard error
-   for this is unreachable from the bridges, because the bridge builds its own
-   request struct and drops the value instead.
+5. `stop` sequences → **Responses** (no field). The adapter refuses such a
+   request outright; the bridge cannot afford to, so it drops the value and
+   reports it in the compatibility warning it already uses for tools it cannot
+   translate (`549a89d`).
 6. `developer` role → **Anthropic**.
 7. `cache_control` markers → **Chat** and **Responses**; a separate cache-write
-   counter → **Chat**.
+   counter → **Chat**. The target protocols have no field to carry one, so the
+   two OpenAI-inbound bridges opt into caching on the client's behalf rather than
+   forwarding a preference that cannot exist.
 8. Response state (`previous_response_id`, `conversation`) → **Anthropic** and
    **Chat**.
 9. Tool-result `is_error` and images → **Chat** (its tool messages are strings).
 10. Responses per-item `id` / `status` and annotations → the IR, hence any target.
-11. Anthropic server tools ↔ OpenAI tool models: dropped at Anthropic decode, and
-    the Chat tool model only holds functions.
+11. Anthropic server tools ↔ OpenAI tool models: preserved on the Anthropic side
+    (`4ca6e18`), but the Chat tool model only holds functions and an OpenAI
+    server tool cannot be expressed in Anthropic's union, so the cross-family
+    bridge drops it with a warning.
 12. Anthropic `stop_sequence` (the matched string) and `thinking.display` → the IR.
 
 ### 4.5 Expressible but not implemented
 
-> **Partly fixed.** Item 1 and the `top_k` part of the list below are still
-> open; Anthropic's dropped `ToolUnion` branches are fixed in `4ca6e18`, and the
-> stop-sequence asymmetry is fixed in `549a89d`.
+> **Partly fixed.** Items 1, 2, 4, 5, 8 and 9 are still open. Item 3 is fixed
+> in `411ba15`, item 6 in `4ca6e18`, and item 7 in `4ca6e18` and `549a89d`.
 
 These are the actionable conversion gaps, ordered by payoff:
 
@@ -550,17 +554,21 @@ These are the actionable conversion gaps, ordered by payoff:
    the IR, which already has every needed field.
 2. **`Metadata` is never copied by any cross-family bridge**, although the IR and
    the Anthropic request model both support it.
-3. **`reasoning.effort` → Anthropic `budget_tokens`** mapping. Only the reverse
-   exists.
+3. ~~**`reasoning.effort` → Anthropic `budget_tokens`** mapping.~~ Fixed: the
+   level converts to a budget and back, and all three Anthropic-target bridges
+   pass it through. The bands are quantised, so a budget that is not one of the
+   three still reads back as the nearest level.
 4. **`include: ["reasoning.encrypted_content"]` is never set** for a Responses
    upstream driven by an Anthropic client, so encrypted reasoning may never come
    back and thinking cannot round-trip.
 5. **`json_object` → Anthropic** is dropped instead of becoming a permissive
    schema.
-6. **Provider-defined tools → Anthropic** are dropped in the Chat path and replaced
-   by a system-prompt warning in the Responses path. The IR slot exists.
-7. **`top_k` is never assigned by the two bridges that encode to Anthropic**,
-   although the native encoder supports it.
+6. ~~**Provider-defined tools → Anthropic** are dropped in the Chat path and
+   replaced by a system-prompt warning in the Responses path.~~ Fixed: Anthropic's
+   own server tools round-trip through `ToolProviderDefined`, and a provider tool
+   from another family is dropped *and* reported rather than silently lost.
+7. ~~**`top_k` is never assigned by the two bridges that encode to Anthropic**,
+   although the native encoder supports it.~~ Fixed.
 8. **User/assistant alternation is not normalised** for Anthropic targets.
 9. **Responses annotations and Anthropic `stop_sequence`** are modelled in
    unrelated structs but never surfaced in the IR.
@@ -588,18 +596,23 @@ down from 11 (Anthropic), 21 (Responses) and 14 (Chat).
 | 5 | Anthropic `Message` omitted the required `container`, `stop_details` and `stop_sequence`; `usage` carried four of nine members; a text block omitted `citations` and a tool_use block omitted `caller`; `output_tokens_details.thinking_tokens` was never read, so reasoning usage was lost on every conversion to OpenAI | `549858f` |
 | 6 | 20 of Anthropic's 21 `ToolUnion` branches were dropped on decode; a custom tool's required `input_schema` was omitted; the Chat→Anthropic path copied `top_p` but not `top_k`; an empty prompt serialised as `"messages": null` instead of being reported | `4ca6e18` |
 | 7 | A stop sequence on the Anthropic→Responses path was dropped in silence while the adapter refuses it outright; it is now reported through the existing compatibility warning | `549a89d` |
+| 8 | A reasoning level never reached Anthropic: every effort encoded to the same 1024-token thinking budget and every budget decoded back to no level. The level now converts both ways (1024/2048/3072), the three Anthropic-target bridges pass it through, and a budget too large for the reply cap is clamped to fit instead of dropping thinking | `411ba15` |
+| 9 | `cache_control` was injected whenever `Cache` was unset, so every request the adapter produced was cache-marked — and a cache write costs more than an uncached read. The adapter now applies the marker only on an explicit `true`; the two OpenAI-inbound bridges keep opting in, but explicitly, because their protocols have no cache field | `411ba15` |
 
 ### 5.2 Deliberately not changed
 
-- **The default `cache_control`.** `applyAnthropicCache` injects
-  `cache_control: ephemeral` whenever the IR `Cache` is nil, which reads as an
-  inverted default. It is not a bug: `TestAnthropicMessagesEncodeRequestDefaultsCacheOn`
-  pins it by name. Reversing it is a product decision about who pays for cache
-  writes, not a conformance fix, so it is left alone and recorded here.
 - **The `4096` default for Anthropic `max_tokens`.** Unlike the other two
   protocols, Anthropic requires `max_tokens`, so a request that omits it cannot
   be encoded at all without choosing a number. The value is still invented, but
   only where the alternative is no request.
+- **Thinking is dropped, not an error, when no legal budget exists.** Anthropic
+  requires `1024 <= budget_tokens < max_tokens`. A request with
+  `max_tokens <= 1024` that asks for reasoning therefore cannot be encoded with
+  thinking at all. The encoder omits the thinking block and sends the request,
+  rather than failing a request the caller could otherwise have had answered
+  without reasoning. This is the one remaining place where a client's request
+  for reasoning is silently not honoured, and it is unavoidable in the target
+  protocol.
 - **Warning text appended to the system prompt / instructions.** The bridges
   report what they could not translate by injecting a sentence into the model's
   input. That is a pre-existing design choice with a real cost — it changes what
