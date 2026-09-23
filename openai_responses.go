@@ -125,7 +125,10 @@ func (a OpenAIResponsesAdapter) DecodeResponse(raw []byte) (*LLMResponse, error)
 	}
 
 	content := make([]Part, 0)
-	usage := decodeOpenAIResponsesUsage(response.Usage)
+	usage := Usage{}
+	if response.Usage != nil {
+		usage = decodeOpenAIResponsesUsage(*response.Usage)
+	}
 	hasToolCall := false
 	hasRefusal := false
 	for _, item := range response.Output {
@@ -151,7 +154,7 @@ func (a OpenAIResponsesAdapter) DecodeResponse(raw []byte) (*LLMResponse, error)
 			continue
 		}
 		if item.Type == "image_generation_call" {
-			mergeOpenAIResponsesUsage(&usage, decodeOpenAIResponsesImageUsage(item.Usage))
+			mergeOpenAIResponsesUsage(&usage, decodeOpenAIResponsesImageUsage(openAIResponsesOutputItemUsage(item)))
 			content = append(content, decodeOpenAIResponsesImageOutputItem(item)...)
 			continue
 		}
@@ -201,19 +204,31 @@ func (a OpenAIResponsesAdapter) EncodeResponse(resp *LLMResponse, opts EncodeRes
 	}
 
 	content, finishReason := firstResponseContent(resp)
+	status := encodeOpenAIResponsesStatus(finishReason)
+	usage := encodeOpenAIResponsesUsage(resp.Usage, resp.BillingUsage())
+
 	response := openAIResponsesResponse{
-		ID:         resp.ID,
-		Object:     "response",
-		Status:     encodeOpenAIResponsesStatus(finishReason),
-		Model:      model,
-		OutputText: joinTextParts(content),
-		Usage:      encodeOpenAIResponsesUsage(resp.Usage, resp.BillingUsage()),
+		openAIResponsesResponseCore: responsesResponseCoreDefaults(),
+		Status:                      status,
+		Output:                      make([]openAIResponsesOutputItem, 0),
+		OutputText:                  joinTextParts(content),
+		Usage:                       &usage,
 	}
-	if item, ok := encodeOpenAIResponsesReasoningOutputItem(content, prefixedID(resp.ID, "rs"), encodeOpenAIResponsesStatus(finishReason)); ok {
+	response.ID = resp.ID
+	response.Model = model
+	// The non-streaming path used to report `completed` for every reason but a
+	// token limit, contradicting the streaming path which reports
+	// `response.incomplete`.
+	response.IncompleteDetails = encodeOpenAIResponsesIncompleteDetails(finishReason)
+	if finishReason == FinishError {
+		response.Error = encodeOpenAIResponsesResponseError()
+	}
+
+	if item, ok := encodeOpenAIResponsesReasoningOutputItem(content, prefixedID(resp.ID, "rs"), status); ok {
 		response.Output = append(response.Output, item)
 	}
 	if outputContent := encodeOpenAIResponsesOutputContent(content); len(outputContent) > 0 {
-		response.Output = append(response.Output, openAIResponsesOutputItem{ID: prefixedID(resp.ID, "msg"), Type: "message", Role: string(RoleAssistant), Status: encodeOpenAIResponsesStatus(finishReason), Content: outputContent})
+		response.Output = append(response.Output, openAIResponsesOutputItem{ID: prefixedID(resp.ID, "msg"), Type: "message", Role: string(RoleAssistant), Status: status, Content: outputContent})
 	}
 	response.Output = append(response.Output, encodeOpenAIResponsesResponseToolCalls(content, finishReason)...)
 	response.Output = append(response.Output, encodeOpenAIResponsesResponseToolResults(content, finishReason)...)
@@ -400,9 +415,12 @@ func encodeOpenAIResponsesReasoningConfig(req *LLMRequest) any {
 	if effort == "none" {
 		return nil
 	}
+	// Clamp onto the schema's enum; an unrecognised level falls through to the
+	// budget or boolean fallbacks rather than being sent verbatim.
+	normalized := normalizeOpenAIReasoningEffort(effort)
 	config := map[string]any{}
-	if effort != "" {
-		config["effort"] = effort
+	if normalized != "" {
+		config["effort"] = normalized
 	} else if req.ReasoningBudgetTokens != nil {
 		config["effort"] = mapReasoningBudgetToOpenAIEffort(*req.ReasoningBudgetTokens)
 	} else if req.Reasoning != nil && *req.Reasoning {
@@ -417,10 +435,11 @@ func encodeOpenAIResponsesReasoningConfig(req *LLMRequest) any {
 	return config
 }
 
+// mapReasoningBudgetToOpenAIEffort picks the nearest level for a token budget.
+// The enum stops at "high"; "xhigh" is not a member of the schema's
+// ReasoningEffort, so the largest budget maps to "high".
 func mapReasoningBudgetToOpenAIEffort(budget int) string {
 	switch {
-	case budget >= 8192:
-		return "xhigh"
 	case budget >= 4096:
 		return "high"
 	default:
@@ -502,7 +521,9 @@ func encodeOpenAIResponsesOutputContent(parts []Part) []openAIResponsesContentPa
 	encoded := make([]openAIResponsesContentPart, 0, len(parts))
 	for _, part := range parts {
 		if part.Type == PartText && part.Text != nil {
-			encoded = append(encoded, openAIResponsesContentPart{Type: "output_text", Text: part.Text.Text})
+			// OutputTextContent marks `annotations` as required, so an empty
+			// array is emitted rather than omitting the member.
+			encoded = append(encoded, openAIResponsesContentPart{Type: "output_text", Text: part.Text.Text, Annotations: []openAIResponsesAnnotation{}})
 			continue
 		}
 		if part.Type == PartRefusal && part.Refusal != nil {
@@ -1010,14 +1031,41 @@ func decodeOpenAIResponsesFinishReason(status string, details *openAIResponsesIn
 	}
 }
 
+// encodeOpenAIResponsesStatus maps an IR finish reason onto the Response
+// status enum. It must agree with the streaming encoder, which reports
+// `response.incomplete` for a content filter: the non-streaming path used to
+// call a filtered response `completed`.
 func encodeOpenAIResponsesStatus(reason FinishReason) string {
 	switch reason {
 	case FinishError:
 		return "failed"
-	case FinishLength:
+	case FinishLength, FinishContentFilter, FinishContextWindowExceeded:
 		return "incomplete"
 	default:
 		return "completed"
+	}
+}
+
+// encodeOpenAIResponsesIncompleteDetails reports why a response stopped short.
+// It is nil for every status other than `incomplete`.
+func encodeOpenAIResponsesIncompleteDetails(reason FinishReason) *openAIResponsesIncompleteDetails {
+	switch reason {
+	case FinishLength, FinishContextWindowExceeded:
+		return &openAIResponsesIncompleteDetails{Reason: "max_output_tokens"}
+	case FinishContentFilter:
+		return &openAIResponsesIncompleteDetails{Reason: "content_filter"}
+	default:
+		return nil
+	}
+}
+
+// encodeOpenAIResponsesResponseError renders the `error` member of a failed
+// response. The schema requires the member to be present, so a failed response
+// describes the failure rather than leaving it null.
+func encodeOpenAIResponsesResponseError() any {
+	return map[string]any{
+		"code":    "server_error",
+		"message": "the model failed to generate a response",
 	}
 }
 
@@ -1073,32 +1121,37 @@ func addUsageTokens(left *int, right *int) *int {
 	return &sum
 }
 
+// encodeOpenAIResponsesUsage renders the IR usage as a ResponseUsage, which
+// requires both `input_tokens_details` and `output_tokens_details` whenever it
+// is present, so the two objects are always emitted and simply carry the
+// counters that are known.
 func encodeOpenAIResponsesUsage(usage Usage, billingUsage BillingUsage) openAIResponsesUsage {
+	inputTokens := usage.InputTokens
+	outputTokens := usage.OutputTokens
+	cachedInputTokens := usage.CachedInputTokens
 	if hasBillingUsage(billingUsage) {
-		inputTokens := billingUsage.InputTokens + billingUsage.CachedInputTokens
-		outputTokens := billingUsage.OutputTokens
-		cachedInputTokens := billingUsage.CachedInputTokens
-		encoded := openAIResponsesUsage{InputTokens: &inputTokens, OutputTokens: &outputTokens, TotalTokens: calculateTotalTokens(&inputTokens, &outputTokens)}
-		if usage.CachedInputTokens != nil || usage.CacheCreationInputTokens != nil {
-			encoded.InputTokensDetails = &openAIResponsesInputTokensDetails{CacheWriteTokens: usage.CacheCreationInputTokens}
-			if usage.CachedInputTokens != nil {
-				encoded.InputTokensDetails.CachedTokens = &cachedInputTokens
-			}
-		}
-		if usage.ReasoningTokens != nil {
-			encoded.OutputTokensDetails = &openAIResponsesOutputTokensDetails{ReasoningTokens: usage.ReasoningTokens}
-		}
-		return encoded
+		total := billingUsage.InputTokens + billingUsage.CachedInputTokens
+		output := billingUsage.OutputTokens
+		inputTokens = &total
+		outputTokens = &output
+		cached := billingUsage.CachedInputTokens
+		cachedInputTokens = &cached
 	}
-	encoded := openAIResponsesUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: calculateTotalTokens(usage.InputTokens, usage.OutputTokens)}
-	if usage.CachedInputTokens != nil || usage.CacheCreationInputTokens != nil {
-		encoded.InputTokensDetails = &openAIResponsesInputTokensDetails{
-			CachedTokens:     usage.CachedInputTokens,
+
+	encoded := openAIResponsesUsage{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  calculateTotalTokens(inputTokens, outputTokens),
+		// Both detail objects require their counter, so an unknown counter is
+		// reported as zero rather than omitted; there is no other representable
+		// value.
+		InputTokensDetails: &openAIResponsesInputTokensDetails{
+			CachedTokens:     intPtr(intValue(cachedInputTokens)),
 			CacheWriteTokens: usage.CacheCreationInputTokens,
-		}
-	}
-	if usage.ReasoningTokens != nil {
-		encoded.OutputTokensDetails = &openAIResponsesOutputTokensDetails{ReasoningTokens: usage.ReasoningTokens}
+		},
+		OutputTokensDetails: &openAIResponsesOutputTokensDetails{
+			ReasoningTokens: intPtr(intValue(usage.ReasoningTokens)),
+		},
 	}
 	return encoded
 }
@@ -1245,16 +1298,20 @@ func (m *openAIResponsesInputItem) UnmarshalJSON(raw []byte) error {
 }
 
 type openAIResponsesContentPart struct {
-	Type        string                      `json:"type"`
-	Text        string                      `json:"text,omitempty"`
-	Refusal     string                      `json:"refusal,omitempty"`
-	ImageURL    string                      `json:"image_url,omitempty"`
-	FileID      string                      `json:"file_id,omitempty"`
-	FileData    string                      `json:"file_data,omitempty"`
-	FileURL     string                      `json:"file_url,omitempty"`
-	Filename    string                      `json:"filename,omitempty"`
-	Detail      string                      `json:"detail,omitempty"`
-	Annotations []openAIResponsesAnnotation `json:"annotations,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Refusal  string `json:"refusal,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	FileURL  string `json:"file_url,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	// Annotations is `any` rather than a slice so that an explicitly empty
+	// array survives omitempty: encoding/json treats an empty slice as empty
+	// but a non-nil interface as present, and the schema requires the member on
+	// an output_text part while input parts must not carry it.
+	Annotations any `json:"annotations,omitempty"`
 }
 
 type openAIResponsesTool struct {
@@ -1321,15 +1378,53 @@ func newOpenAIResponsesProviderTool(toolType string, config map[string]any) open
 	return tool
 }
 
+// openAIResponsesResponseCore carries every member the Response schema marks as
+// required, so that the non-streaming response and every streamed snapshot of
+// it embed one definition and cannot drift apart. They had drifted: the
+// non-streaming encoder omitted nine of the fourteen required members while the
+// streaming encoder omitted others.
+//
+// The IR does not carry most of these, so each is reported with the value the
+// official API uses for an unset field: null for the nullable members, and the
+// documented default for the rest. `tools` is the one exception - the schema
+// requires an array and does not allow null, so an empty array is the only
+// representable value when the caller's tools are unknown at encode time.
+type openAIResponsesResponseCore struct {
+	ID                string                            `json:"id"`
+	Object            string                            `json:"object"`
+	CreatedAt         int64                             `json:"created_at"`
+	Error             any                               `json:"error"`
+	IncompleteDetails *openAIResponsesIncompleteDetails `json:"incomplete_details"`
+	Instructions      *string                           `json:"instructions"`
+	Metadata          map[string]any                    `json:"metadata"`
+	Model             string                            `json:"model"`
+	ParallelToolCalls bool                              `json:"parallel_tool_calls"`
+	Temperature       *float64                          `json:"temperature"`
+	ToolChoice        any                               `json:"tool_choice"`
+	Tools             []any                             `json:"tools"`
+	TopP              *float64                          `json:"top_p"`
+}
+
+// responsesResponseCoreDefaults fills the required members with the neutral
+// values described on openAIResponsesResponseCore. Callers overlay the members
+// they do know (id, model, status, and so on).
+func responsesResponseCoreDefaults() openAIResponsesResponseCore {
+	return openAIResponsesResponseCore{
+		Object:            "response",
+		CreatedAt:         currentTimestamp(),
+		Metadata:          map[string]any{},
+		ParallelToolCalls: true,
+		ToolChoice:        "auto",
+		Tools:             []any{},
+	}
+}
+
 type openAIResponsesResponse struct {
-	ID                string                            `json:"id,omitempty"`
-	Object            string                            `json:"object,omitempty"`
-	Status            string                            `json:"status,omitempty"`
-	IncompleteDetails *openAIResponsesIncompleteDetails `json:"incomplete_details,omitempty"`
-	Model             string                            `json:"model,omitempty"`
-	Output            []openAIResponsesOutputItem       `json:"output,omitempty"`
-	OutputText        string                            `json:"output_text,omitempty"`
-	Usage             openAIResponsesUsage              `json:"usage,omitempty"`
+	openAIResponsesResponseCore
+	Status     string                      `json:"status,omitempty"`
+	Output     []openAIResponsesOutputItem `json:"output"`
+	OutputText string                      `json:"output_text,omitempty"`
+	Usage      *openAIResponsesUsage       `json:"usage,omitempty"`
 }
 
 type openAIResponsesIncompleteDetails struct {
@@ -1337,23 +1432,26 @@ type openAIResponsesIncompleteDetails struct {
 }
 
 type openAIResponsesOutputItem struct {
-	ID               string                       `json:"id,omitempty"`
-	Type             string                       `json:"type"`
-	Role             string                       `json:"role,omitempty"`
-	Status           string                       `json:"status,omitempty"`
-	Content          []openAIResponsesContentPart `json:"content,omitempty"`
-	Summary          []openAIResponsesContentPart `json:"summary,omitempty"`
-	Text             string                       `json:"text,omitempty"`
-	CallID           string                       `json:"call_id,omitempty"`
-	Name             string                       `json:"name,omitempty"`
-	Arguments        *openAIResponsesArguments    `json:"arguments,omitempty"`
-	Input            any                          `json:"input,omitempty"`
-	Output           any                          `json:"output,omitempty"`
-	ImageURL         string                       `json:"image_url,omitempty"`
-	Result           string                       `json:"result,omitempty"`
-	OutputFormat     string                       `json:"output_format,omitempty"`
-	Usage            openAIResponsesUsage         `json:"usage,omitempty"`
-	EncryptedContent string                       `json:"encrypted_content,omitempty"`
+	ID           string                       `json:"id,omitempty"`
+	Type         string                       `json:"type"`
+	Role         string                       `json:"role,omitempty"`
+	Status       string                       `json:"status,omitempty"`
+	Content      []openAIResponsesContentPart `json:"content,omitempty"`
+	Summary      []openAIResponsesContentPart `json:"summary,omitempty"`
+	Text         string                       `json:"text,omitempty"`
+	CallID       string                       `json:"call_id,omitempty"`
+	Name         string                       `json:"name,omitempty"`
+	Arguments    *openAIResponsesArguments    `json:"arguments,omitempty"`
+	Input        any                          `json:"input,omitempty"`
+	Output       any                          `json:"output,omitempty"`
+	ImageURL     string                       `json:"image_url,omitempty"`
+	Result       string                       `json:"result,omitempty"`
+	OutputFormat string                       `json:"output_format,omitempty"`
+	// Usage is optional on a function tool call item; keeping it a pointer
+	// stops an absent value serialising as an empty `usage` object, which no
+	// member of the schema permits.
+	Usage            *openAIResponsesUsage `json:"usage,omitempty"`
+	EncryptedContent string                `json:"encrypted_content,omitempty"`
 }
 
 type openAIResponsesUsage struct {
@@ -1382,7 +1480,7 @@ type openAIResponsesStreamEvent struct {
 	Response     *openAIResponsesStreamResponse    `json:"response,omitempty"`
 	Item         *openAIResponsesStreamItem        `json:"item,omitempty"`
 	ItemID       string                            `json:"item_id,omitempty"`
-	ContentPart  *openAIResponsesStreamContentPart `json:"content_part,omitempty"`
+	ContentPart  *openAIResponsesStreamContentPart `json:"part,omitempty"`
 	Index        int                               `json:"index,omitempty"`
 	OutputIndex  *int                              `json:"output_index,omitempty"`
 	ContentIndex *int                              `json:"content_index,omitempty"`
@@ -1394,14 +1492,10 @@ type openAIResponsesStreamEvent struct {
 }
 
 type openAIResponsesStreamResponse struct {
-	ID                string                            `json:"id,omitempty"`
-	Object            string                            `json:"object,omitempty"`
-	Status            string                            `json:"status,omitempty"`
-	Error             any                               `json:"error,omitempty"`
-	IncompleteDetails *openAIResponsesIncompleteDetails `json:"incomplete_details,omitempty"`
-	Model             string                            `json:"model,omitempty"`
-	Usage             *openAIResponsesUsage             `json:"usage,omitempty"`
-	Output            []openAIResponsesStreamItem       `json:"output,omitempty"`
+	openAIResponsesResponseCore
+	Status string                      `json:"status,omitempty"`
+	Usage  *openAIResponsesUsage       `json:"usage,omitempty"`
+	Output []openAIResponsesStreamItem `json:"output"`
 }
 
 type openAIResponsesStreamItem struct {
@@ -1416,13 +1510,17 @@ type openAIResponsesStreamItem struct {
 	Content          []openAIResponsesContentPart `json:"content,omitempty"`
 	Summary          []openAIResponsesContentPart `json:"summary,omitempty"`
 	EncryptedContent string                       `json:"encrypted_content,omitempty"`
-	Usage            openAIResponsesUsage         `json:"usage,omitempty"`
+	Usage            *openAIResponsesUsage        `json:"usage,omitempty"`
 }
 
 type openAIResponsesStreamContentPart struct {
-	Type        string                      `json:"type,omitempty"`
-	Text        string                      `json:"text,omitempty"`
-	Annotations []openAIResponsesAnnotation `json:"annotations,omitempty"`
+	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
+	// Annotations is `any` rather than a slice so that an explicitly empty
+	// array survives omitempty: encoding/json treats an empty slice as empty
+	// but a non-nil interface as present, and the schema requires the member on
+	// an output_text part while input parts must not carry it.
+	Annotations any `json:"annotations,omitempty"`
 }
 
 type openAIResponsesAnnotation struct {
@@ -1644,8 +1742,24 @@ func (d *openAIResponsesStreamDecoder) Decode(event RawStreamEvent) ([]StreamPar
 	}
 }
 
+// openAIResponsesItemUsage reads the optional usage of an output item, which
+// the schema only defines for image generation calls.
+func openAIResponsesItemUsage(item openAIResponsesStreamItem) openAIResponsesUsage {
+	if item.Usage == nil {
+		return openAIResponsesUsage{}
+	}
+	return *item.Usage
+}
+
+func openAIResponsesOutputItemUsage(item openAIResponsesOutputItem) openAIResponsesUsage {
+	if item.Usage == nil {
+		return openAIResponsesUsage{}
+	}
+	return *item.Usage
+}
+
 func (d *openAIResponsesStreamDecoder) rememberImageGenerationUsage(item openAIResponsesStreamItem, outputIndex *int) {
-	usage := decodeOpenAIResponsesImageUsage(item.Usage)
+	usage := decodeOpenAIResponsesImageUsage(openAIResponsesItemUsage(item))
 	for index := range d.imageUsage {
 		remembered := d.imageUsage[index]
 		if sameOpenAIResponsesStreamImageItem(remembered.ID, remembered.OutputIndex, item.ID, outputIndex) {
@@ -1662,7 +1776,7 @@ func (d *openAIResponsesStreamDecoder) mergeImageGenerationUsage(base *Usage, it
 		if item.Type != "image_generation_call" {
 			continue
 		}
-		usage := decodeOpenAIResponsesImageUsage(item.Usage)
+		usage := decodeOpenAIResponsesImageUsage(openAIResponsesItemUsage(item))
 		for index, remembered := range d.imageUsage {
 			if sameOpenAIResponsesStreamImageItem(remembered.ID, remembered.OutputIndex, item.ID, &outputIndex) {
 				usage = fillMissingUsageTokens(usage, remembered.Usage)
@@ -1859,7 +1973,9 @@ func (e *openAIResponsesStreamEncoder) Encode(part StreamPart) ([]RawStreamEvent
 	case StreamStart:
 		e.started = true
 		e.responseID = part.ID
-		resp := openAIResponsesStreamResponse{ID: part.ID, Object: "response", Status: "in_progress", Model: e.model}
+		resp := openAIResponsesStreamResponse{openAIResponsesResponseCore: responsesResponseCoreDefaults(), Status: "in_progress", Output: make([]openAIResponsesStreamItem, 0)}
+		resp.ID = part.ID
+		resp.Model = e.model
 		if part.Usage.InputTokens != nil || part.Usage.OutputTokens != nil {
 			u := encodeOpenAIResponsesUsage(part.Usage, billingUsageForProtocol(ProtocolOpenAIResponses, part.Usage))
 			resp.Usage = &u
@@ -1972,26 +2088,44 @@ func (e *openAIResponsesStreamEncoder) Encode(part StreamPart) ([]RawStreamEvent
 		return singleOpenAIResponsesStreamEvent("response.function_call_arguments.delta", openAIResponsesStreamEvent{Type: "response.function_call_arguments.delta", ItemID: e.currentFcID, OutputIndex: intPtr(len(e.outputItems)), Delta: part.Delta})
 	case StreamToolInputEnd:
 		itemID := e.currentFcID
-		if e.currentFcID != "" {
-			custom, _ := part.ProviderMetadata["custom_tool_call"].(bool)
-			itemType := "function_call"
-			item := openAIResponsesStreamItem{ID: e.currentFcID, Type: itemType, Status: "completed", Name: e.fcName, CallID: e.fcCallID, Arguments: newOpenAIResponsesArgumentsString(e.fcArguments)}
-			if custom {
-				item.Type = "custom_tool_call"
-				item.Arguments = nil
-				item.Input = e.fcArguments
-			}
-			e.outputItems = append(e.outputItems, item)
-			e.currentFcID = ""
+		if itemID == "" {
+			// No tool call was ever opened for this id, so there is nothing to
+			// complete.
+			return nil, nil
 		}
+		custom, _ := part.ProviderMetadata["custom_tool_call"].(bool)
+		item := openAIResponsesStreamItem{ID: itemID, Type: "function_call", Status: "completed", Name: e.fcName, CallID: e.fcCallID, Arguments: newOpenAIResponsesArgumentsString(e.fcArguments)}
+		if custom {
+			item.Type = "custom_tool_call"
+			item.Arguments = nil
+			item.Input = e.fcArguments
+		}
+		e.outputItems = append(e.outputItems, item)
+		e.currentFcID = ""
 		outputIndex := len(e.outputItems) - 1
 		if outputIndex < 0 {
 			outputIndex = 0
 		}
-		if custom, ok := part.ProviderMetadata["custom_tool_call"].(bool); ok && custom {
+		if custom {
 			return singleOpenAIResponsesStreamEvent("response.custom_tool_call_input.done", openAIResponsesStreamEvent{Type: "response.custom_tool_call_input.done", ItemID: itemID, OutputIndex: intPtr(outputIndex)})
 		}
-		return singleOpenAIResponsesStreamEvent("response.function_call_arguments.done", openAIResponsesStreamEvent{Type: "response.function_call_arguments.done", ItemID: itemID, OutputIndex: intPtr(outputIndex)})
+
+		// The incremental path used to emit only
+		// `response.function_call_arguments.done`, without the `arguments` the
+		// event requires and without ever reporting the item as done, so a
+		// client waiting for `response.output_item.done` never saw the tool
+		// call. It now emits exactly what the atomic StreamToolCall path emits.
+		events := make([]RawStreamEvent, 0, 2)
+		argumentsDone, err := singleOpenAIResponsesStreamEvent("response.function_call_arguments.done", openAIResponsesStreamEvent{Type: "response.function_call_arguments.done", ItemID: itemID, OutputIndex: intPtr(outputIndex), Arguments: e.fcArguments})
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, argumentsDone...)
+		itemDone, err := singleOpenAIResponsesStreamEvent("response.output_item.done", openAIResponsesStreamEvent{Type: "response.output_item.done", OutputIndex: intPtr(outputIndex), Item: &item})
+		if err != nil {
+			return nil, err
+		}
+		return append(events, itemDone...), nil
 	case StreamToolCall:
 		return e.encodeToolCall(part)
 	case StreamFinish:
@@ -2048,7 +2182,7 @@ func (e *openAIResponsesStreamEncoder) encodeToolCall(part StreamPart) ([]RawStr
 		return nil, err
 	}
 	events = append(events, delta...)
-	done, err := singleOpenAIResponsesStreamEvent("response.function_call_arguments.done", openAIResponsesStreamEvent{Type: "response.function_call_arguments.done", ItemID: itemID, OutputIndex: intPtr(outputIndex)})
+	done, err := singleOpenAIResponsesStreamEvent("response.function_call_arguments.done", openAIResponsesStreamEvent{Type: "response.function_call_arguments.done", ItemID: itemID, OutputIndex: intPtr(outputIndex), Arguments: input})
 	if err != nil {
 		return nil, err
 	}
@@ -2063,29 +2197,35 @@ func (e *openAIResponsesStreamEncoder) encodeToolCall(part StreamPart) ([]RawStr
 }
 
 func (e *openAIResponsesStreamEncoder) encodeFinish(part StreamPart) ([]RawStreamEvent, error) {
-	status := "completed"
+	status := encodeOpenAIResponsesStatus(part.FinishReason)
 	eventType := "response.completed"
-	var incompleteDetails *openAIResponsesIncompleteDetails
-	if part.FinishReason == FinishLength {
-		status = "incomplete"
+	switch status {
+	case "incomplete":
 		eventType = "response.incomplete"
-		incompleteDetails = &openAIResponsesIncompleteDetails{Reason: "max_output_tokens"}
-	} else if part.FinishReason == FinishContentFilter {
-		status = "incomplete"
-		eventType = "response.incomplete"
-		incompleteDetails = &openAIResponsesIncompleteDetails{Reason: "content_filter"}
-	} else if part.FinishReason == FinishError {
-		status = "failed"
+	case "failed":
 		eventType = "response.failed"
 	}
-	resp := openAIResponsesStreamResponse{ID: e.responseID, Object: "response", Status: status, Error: part.Error, IncompleteDetails: incompleteDetails, Model: e.model}
+
+	resp := openAIResponsesStreamResponse{
+		openAIResponsesResponseCore: responsesResponseCoreDefaults(),
+		Status:                      status,
+	}
+	resp.ID = e.responseID
+	resp.Model = e.model
+	resp.Error = part.Error
+	if status == "failed" && resp.Error == nil {
+		resp.Error = encodeOpenAIResponsesResponseError()
+	}
+	resp.IncompleteDetails = encodeOpenAIResponsesIncompleteDetails(part.FinishReason)
+	// The output belongs inside the Response object. It used to be nested
+	// beside `response` at the top level, where no client looks for it.
+	resp.Output = make([]openAIResponsesStreamItem, len(e.outputItems))
+	copy(resp.Output, e.outputItems)
 	if part.Usage.InputTokens != nil || part.Usage.OutputTokens != nil {
 		u := encodeOpenAIResponsesUsage(part.Usage, billingUsageForProtocol(ProtocolOpenAIResponses, part.Usage))
 		resp.Usage = &u
 	}
-	outputItems := make([]openAIResponsesStreamItem, len(e.outputItems))
-	copy(outputItems, e.outputItems)
-	return singleOpenAIResponsesStreamEvent(eventType, openAIResponsesStreamEvent{Type: eventType, Response: &resp, Output: outputItems})
+	return singleOpenAIResponsesStreamEvent(eventType, openAIResponsesStreamEvent{Type: eventType, Response: &resp})
 }
 
 func (e *openAIResponsesStreamEncoder) encodeStreamError(part StreamPart) ([]RawStreamEvent, error) {

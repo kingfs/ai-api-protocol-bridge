@@ -90,7 +90,9 @@ func TestAnthropicToOpenAIResponsesBridgeEncodeUpstreamRequest(t *testing.T) {
 		t.Fatalf("tool result ordering = %+v", ordered)
 	}
 	reasoningConfig := decoded["reasoning"].(map[string]any)
-	if reasoningConfig["effort"] != "xhigh" || reasoningConfig["summary"] != "auto" {
+	// The ReasoningEffort enum stops at "high"; a budget large enough to have
+	// been reported as "xhigh" now clamps to the largest legal level.
+	if reasoningConfig["effort"] != "high" || reasoningConfig["summary"] != "auto" {
 		t.Fatalf("reasoning config = %+v", reasoningConfig)
 	}
 	if _, ok := decoded["metadata"]; ok {

@@ -48,6 +48,7 @@ func (a OpenAIChatAdapter) DecodeRequest(raw []byte) (*LLMRequest, error) {
 		CandidateCount:    request.N,
 		ResponseFormat:    decodeOpenAIResponseFormat(asRawMessage(request.ResponseFormat)),
 		Reasoning:         decodeReasoningEffort(request.ReasoningEffort),
+		ReasoningEffort:   normalizeOpenAIReasoningEffort(request.ReasoningEffort),
 		Tools:             decodeOpenAITools(request.Tools),
 		ToolChoice:        decodeOpenAIToolChoice(asRawMessage(request.ToolChoice)),
 		ParallelToolCalls: request.ParallelToolCalls,
@@ -86,7 +87,7 @@ func (a OpenAIChatAdapter) EncodeRequest(req *LLMRequest, opts EncodeRequestOpti
 		Seed:                req.Seed,
 		N:                   req.CandidateCount,
 		ResponseFormat:      encodeOpenAIResponseFormat(req.ResponseFormat),
-		ReasoningEffort:     encodeReasoningEffort(req.Reasoning),
+		ReasoningEffort:     encodeOpenAIReasoningEffort(req.ReasoningEffort, req.Reasoning),
 		StreamOptions:       encodeOpenAIStreamOptions(req.Stream),
 		Tools:               encodeOpenAITools(req.Tools),
 		ToolChoice:          encodeOpenAIToolChoice(req.ToolChoice),
@@ -705,11 +706,34 @@ func decodeReasoningEffort(effort string) *bool {
 	return &enabled
 }
 
-func encodeReasoningEffort(reasoning *bool) string {
-	if reasoning == nil || !*reasoning {
+// normalizeOpenAIReasoningEffort clamps an effort onto the enum the OpenAI
+// schemas share, ["low", "medium", "high"]. An unrecognised or absent level
+// yields "", so a caller that only knows reasoning is on falls back to a level
+// instead of emitting an out-of-enum value such as "xhigh".
+func normalizeOpenAIReasoningEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low", "minimal":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high", "xhigh":
+		return "high"
+	default:
 		return ""
 	}
-	return "medium"
+}
+
+// encodeOpenAIReasoningEffort prefers an explicit level over the boolean
+// "reasoning is on" flag, because the level is what the caller actually asked
+// for. It used to drop every level and always send "medium".
+func encodeOpenAIReasoningEffort(effort string, reasoning *bool) string {
+	if normalized := normalizeOpenAIReasoningEffort(effort); normalized != "" {
+		return normalized
+	}
+	if reasoning != nil && *reasoning {
+		return "medium"
+	}
+	return ""
 }
 
 func encodeOpenAIStreamOptions(stream bool) any {

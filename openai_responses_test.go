@@ -330,7 +330,9 @@ func TestOpenAIResponsesEncodeRequestMapsReasoningBudgetToEffort(t *testing.T) {
 	}{
 		{name: "medium", budget: 1024, effort: "medium"},
 		{name: "high", budget: 4096, effort: "high"},
-		{name: "xhigh", budget: 8192, effort: "xhigh"},
+		// "xhigh" is not a member of the schema's ReasoningEffort enum, so the
+		// largest budget reports the largest legal level instead.
+		{name: "largest budget clamps to high", budget: 8192, effort: "high"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := &LLMRequest{

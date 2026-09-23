@@ -1134,14 +1134,23 @@ func withAnthropicParallelToolCalls(choice *anthropicToolChoice, parallelToolCal
 	return choice
 }
 
+// decodeAnthropicStopReason maps Anthropic's StopReason enum onto the IR. Every
+// documented value has a distinct IR counterpart, including the two that
+// Anthropic does not share with OpenAI.
 func decodeAnthropicStopReason(reason string) FinishReason {
 	switch reason {
-	case "end_turn", "stop_sequence":
+	case "end_turn":
 		return FinishStop
+	case "stop_sequence":
+		return FinishStopSequence
 	case "max_tokens":
 		return FinishLength
 	case "tool_use":
 		return FinishToolCalls
+	case "pause_turn":
+		return FinishPauseTurn
+	case "model_context_window_exceeded":
+		return FinishContextWindowExceeded
 	case "refusal":
 		return FinishContentFilter
 	case "":
@@ -1155,13 +1164,24 @@ func encodeAnthropicStopReason(reason FinishReason) string {
 	switch reason {
 	case FinishStop:
 		return "end_turn"
+	case FinishStopSequence:
+		return "stop_sequence"
 	case FinishLength:
 		return "max_tokens"
 	case FinishToolCalls:
 		return "tool_use"
+	case FinishPauseTurn:
+		return "pause_turn"
+	case FinishContextWindowExceeded:
+		return "model_context_window_exceeded"
 	case FinishContentFilter:
 		return "refusal"
 	default:
+		// Anthropic has no value for an internal error or for a reason it did
+		// not itself produce. `end_turn` is the only member of the enum that
+		// does not assert something untrue about token limits or tool calls;
+		// callers that need to distinguish this case must inspect the error
+		// path instead of the stop reason.
 		return "end_turn"
 	}
 }

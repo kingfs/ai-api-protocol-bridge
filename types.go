@@ -270,14 +270,26 @@ func firstResponseContent(resp *LLMResponse) ([]Part, FinishReason) {
 
 type FinishReason string
 
+// FinishReason is the protocol neutral reason generation stopped. It carries
+// every value the supported protocols can distinguish, so that a stop reason
+// survives a decode/encode round trip instead of collapsing into a coarser one:
+// Anthropic separates a natural end (end_turn) from a caller supplied stop
+// sequence (stop_sequence), and has two reasons with no OpenAI equivalent.
 const (
 	FinishStop          FinishReason = "stop"
+	FinishStopSequence  FinishReason = "stop-sequence"
 	FinishLength        FinishReason = "length"
 	FinishContentFilter FinishReason = "content-filter"
 	FinishToolCalls     FinishReason = "tool-calls"
-	FinishError         FinishReason = "error"
-	FinishOther         FinishReason = "other"
-	FinishUnknown       FinishReason = "unknown"
+	// FinishPauseTurn is Anthropic's `pause_turn`: a long running turn was
+	// paused and the response can be sent back to let the model continue.
+	FinishPauseTurn FinishReason = "pause-turn"
+	// FinishContextWindowExceeded is Anthropic's
+	// `model_context_window_exceeded`.
+	FinishContextWindowExceeded FinishReason = "context-window-exceeded"
+	FinishError                 FinishReason = "error"
+	FinishOther                 FinishReason = "other"
+	FinishUnknown               FinishReason = "unknown"
 )
 
 type Usage struct {

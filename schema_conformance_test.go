@@ -197,22 +197,12 @@ func TestEncodedResponsesWithinSchema(t *testing.T) {
 			wantProblems: nil,
 		},
 		{
+			// Fixed: the streaming and non-streaming paths now share one
+			// definition of the required Response members, both token detail
+			// objects are always present, and an output_text part carries the
+			// annotations array the schema requires.
 			name: "openai_responses", bundle: responsesSchemaPath, slot: "response", adapter: NewOpenAIResponsesAdapter(),
-			wantProblems: []string{
-				"missing-required (root)/created_at",
-				"missing-required (root)/error",
-				"missing-required (root)/incomplete_details",
-				"missing-required (root)/instructions",
-				"missing-required (root)/metadata",
-				"missing-required (root)/parallel_tool_calls",
-				"missing-required (root)/temperature",
-				"missing-required (root)/tool_choice",
-				"missing-required (root)/tools",
-				"missing-required (root)/top_p",
-				"missing-required /usage/input_tokens_details",
-				"missing-required /usage/output_tokens_details",
-				"no-branch /output/1 anyOf",
-			},
+			wantProblems: nil,
 		},
 		{
 			name: "anthropic_messages", bundle: anthropicSchemaPath, slot: "response", adapter: NewAnthropicMessagesAdapter(),
