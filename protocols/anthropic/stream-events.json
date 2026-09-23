@@ -1,0 +1,26 @@
+{
+  "id": "anthropic/messages-stream-events",
+  "source": {
+    "kind": "official-docs-markdown",
+    "urls": [
+      "https://platform.claude.com/docs/en/api/messages.md",
+      "https://platform.claude.com/docs/en/build-with-claude/streaming.md"
+    ],
+    "files": {
+      "messages": "anthropic-messages-api.md",
+      "streaming": "anthropic-streaming.md"
+    },
+    "sha256": {
+      "messages": "b5d3e67035cf65834c4fc4a62f6953d555958aaf6a6e7924a7d63a4ad37ae8ae",
+      "streaming": "bf074517dc11caac65c76ef1642106581bac3ec0f31d94cacc84ea0a3c2a5f1d"
+    }
+  },
+  "events": [
+    "content_block_delta",
+    "content_block_start",
+    "content_block_stop",
+    "message_delta",
+    "message_start",
+    "message_stop"
+  ]
+}

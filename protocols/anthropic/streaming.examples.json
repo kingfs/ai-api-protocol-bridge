@@ -1,0 +1,393 @@
+{
+  "id": "anthropic/messages-streaming",
+  "source": {
+    "kind": "official-docs-markdown",
+    "urls": [
+      "https://platform.claude.com/docs/en/build-with-claude/streaming.md"
+    ],
+    "sha256": {
+      "streaming": "bf074517dc11caac65c76ef1642106581bac3ec0f31d94cacc84ea0a3c2a5f1d"
+    }
+  },
+  "transcripts": [
+    {
+      "title": "official streaming transcript 17",
+      "raw": "event: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}}\n",
+      "complete": true,
+      "events": [
+        {
+          "event": "error",
+          "data": "{\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}}"
+        }
+      ]
+    },
+    {
+      "title": "official streaming transcript 18",
+      "raw": "event: content_block_delta\ndata: {\"type\": \"content_block_delta\",\"index\": 0,\"delta\": {\"type\": \"text_delta\", \"text\": \"ello frien\"}}\n",
+      "complete": true,
+      "events": [
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\",\"index\": 0,\"delta\": {\"type\": \"text_delta\", \"text\": \"ello frien\"}}"
+        }
+      ]
+    },
+    {
+      "title": "official streaming transcript 19",
+      "raw": "event: content_block_delta\ndata: {\"type\": \"content_block_delta\",\"index\": 1,\"delta\": {\"type\": \"input_json_delta\",\"partial_json\": \"{\\\"location\\\": \\\"San Fra\"}}}\n",
+      "complete": false,
+      "events": [
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\",\"index\": 1,\"delta\": {\"type\": \"input_json_delta\",\"partial_json\": \"{\\\"location\\\": \\\"San Fra\"}}}"
+        }
+      ]
+    },
+    {
+      "title": "official streaming transcript 20",
+      "raw": "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\\n\\n1071 = 2 \u00d7 462 + 147\"}}\n",
+      "complete": true,
+      "events": [
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\\n\\n1071 = 2 \u00d7 462 + 147\"}}"
+        }
+      ]
+    },
+    {
+      "title": "official streaming transcript 21",
+      "raw": "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds...\"}}\n",
+      "complete": true,
+      "events": [
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds...\"}}"
+        }
+      ]
+    },
+    {
+      "title": "official streaming transcript 31",
+      "raw": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"claude-opus-5-5\", \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 25, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: ping\ndata: {\"type\": \"ping\"}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"!\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\":null}, \"usage\": {\"output_tokens\": 15}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n",
+      "complete": true,
+      "events": [
+        {
+          "event": "message_start",
+          "data": "{\"type\": \"message_start\", \"message\": {\"id\": \"msg_1nZdL29xx5MUA1yADyHTEsnR8uuvGzszyY\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"claude-opus-5-5\", \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 25, \"output_tokens\": 1}}}"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}"
+        },
+        {
+          "event": "ping",
+          "data": "{\"type\": \"ping\"}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"!\"}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\": \"content_block_stop\", \"index\": 0}"
+        },
+        {
+          "event": "message_delta",
+          "data": "{\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\":null}, \"usage\": {\"output_tokens\": 15}}"
+        },
+        {
+          "event": "message_stop",
+          "data": "{\"type\": \"message_stop\"}"
+        }
+      ]
+    },
+    {
+      "title": "official streaming transcript 41",
+      "raw": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_014p7gG3wDgGV9EUtLvnow3U\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":472,\"output_tokens\":2},\"content\":[],\"stop_reason\":null}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: ping\ndata: {\"type\": \"ping\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Okay\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\",\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" let\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"'s\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" check\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" the\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" weather\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" for\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" San\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" Francisco\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\",\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" CA\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\":\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01T1x1fJ34qAmk2tNTrN7Up6\",\"name\":\"get_weather\",\"input\":{}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"location\\\":\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" \\\"San\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" Francisc\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"o,\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" CA\\\"}\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":89}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n",
+      "complete": true,
+      "events": [
+        {
+          "event": "message_start",
+          "data": "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_014p7gG3wDgGV9EUtLvnow3U\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":472,\"output_tokens\":2},\"content\":[],\"stop_reason\":null}}"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}"
+        },
+        {
+          "event": "ping",
+          "data": "{\"type\": \"ping\"}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Okay\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\",\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" let\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"'s\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" check\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" the\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" weather\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" for\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" San\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" Francisco\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\",\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" CA\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\":\"}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\":\"content_block_stop\",\"index\":0}"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01T1x1fJ34qAmk2tNTrN7Up6\",\"name\":\"get_weather\",\"input\":{}}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"location\\\":\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" \\\"San\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" Francisc\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"o,\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" CA\\\"}\"}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\":\"content_block_stop\",\"index\":1}"
+        },
+        {
+          "event": "message_delta",
+          "data": "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":89}}"
+        },
+        {
+          "event": "message_stop",
+          "data": "{\"type\":\"message_stop\"}"
+        }
+      ]
+    },
+    {
+      "title": "official streaming transcript 51",
+      "raw": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_01...\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"claude-opus-5-5\", \"stop_reason\": null, \"stop_sequence\": null}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\\n\\n1071 = 2 \u00d7 462 + 147\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\n462 = 3 \u00d7 147 + 21\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\n147 = 7 \u00d7 21 + 0\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\nThe remainder is 0, so GCD(1071, 462) = 21.\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds...\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"The greatest common divisor of 1071 and 462 is **21**.\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 1}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n",
+      "complete": true,
+      "events": [
+        {
+          "event": "message_start",
+          "data": "{\"type\": \"message_start\", \"message\": {\"id\": \"msg_01...\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"claude-opus-5-5\", \"stop_reason\": null, \"stop_sequence\": null}}"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"thinking\", \"thinking\": \"\", \"signature\": \"\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"I need to find the GCD of 1071 and 462 using the Euclidean algorithm.\\n\\n1071 = 2 \u00d7 462 + 147\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\n462 = 3 \u00d7 147 + 21\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\n147 = 7 \u00d7 21 + 0\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"thinking_delta\", \"thinking\": \"\\nThe remainder is 0, so GCD(1071, 462) = 21.\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"signature_delta\", \"signature\": \"EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds...\"}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\": \"content_block_stop\", \"index\": 0}"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\": \"content_block_start\", \"index\": 1, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\": \"content_block_delta\", \"index\": 1, \"delta\": {\"type\": \"text_delta\", \"text\": \"The greatest common divisor of 1071 and 462 is **21**.\"}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\": \"content_block_stop\", \"index\": 1}"
+        },
+        {
+          "event": "message_delta",
+          "data": "{\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}}"
+        },
+        {
+          "event": "message_stop",
+          "data": "{\"type\": \"message_stop\"}"
+        }
+      ]
+    },
+    {
+      "title": "official streaming transcript 61",
+      "raw": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01G...\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":2679,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":3}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I'll check\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" the current weather in New York City for you\"}}\n\nevent: ping\ndata: {\"type\": \"ping\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\".\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_014hJH82Qum7Td6UV8gDXThB\",\"name\":\"web_search\",\"input\":{}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\":\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" \\\"weather\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" NY\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"C to\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"day\\\"}\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1 }\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"srvtoolu_014hJH82Qum7Td6UV8gDXThB\",\"content\":[{\"type\":\"web_search_result\",\"title\":\"Weather in New York City in May 2025 (New York) - detailed Weather Forecast for a month\",\"url\":\"https://world-weather.info/forecast/usa/new_york/may-2025/\",\"encrypted_content\":\"Ev0DCioIAxgCIiQ3NmU4ZmI4OC1k...\",\"page_age\":null},...]}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\"Here's the current weather information for New York\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\" City:\\n\\n# Weather\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\" in New York City\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\n\\n\"}}\n\n...\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":17}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":10682,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":510,\"server_tool_use\":{\"web_search_requests\":1}}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n",
+      "complete": false,
+      "events": [
+        {
+          "event": "message_start",
+          "data": "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_01G...\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":2679,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":3}}}"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I'll check\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" the current weather in New York City for you\"}}"
+        },
+        {
+          "event": "ping",
+          "data": "{\"type\": \"ping\"}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\".\"}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\":\"content_block_stop\",\"index\":0}"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_014hJH82Qum7Td6UV8gDXThB\",\"name\":\"web_search\",\"input\":{}}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\":\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" \\\"weather\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" NY\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"C to\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"day\\\"}\"}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\":\"content_block_stop\",\"index\":1 }"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"srvtoolu_014hJH82Qum7Td6UV8gDXThB\",\"content\":[{\"type\":\"web_search_result\",\"title\":\"Weather in New York City in May 2025 (New York) - detailed Weather Forecast for a month\",\"url\":\"https://world-weather.info/forecast/usa/new_york/may-2025/\",\"encrypted_content\":\"Ev0DCioIAxgCIiQ3NmU4ZmI4OC1k...\",\"page_age\":null},...]}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\":\"content_block_stop\",\"index\":2}"
+        },
+        {
+          "event": "content_block_start",
+          "data": "{\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\"Here's the current weather information for New York\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\" City:\\n\\n# Weather\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\" in New York City\"}}"
+        },
+        {
+          "event": "content_block_delta",
+          "data": "{\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\n\\n\"}}"
+        },
+        {
+          "event": "content_block_stop",
+          "data": "{\"type\":\"content_block_stop\",\"index\":17}"
+        },
+        {
+          "event": "message_delta",
+          "data": "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":10682,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":510,\"server_tool_use\":{\"web_search_requests\":1}}}"
+        },
+        {
+          "event": "message_stop",
+          "data": "{\"type\":\"message_stop\"}"
+        }
+      ]
+    }
+  ]
+}

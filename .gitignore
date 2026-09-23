@@ -1,0 +1,4 @@
+# Local scratch space: Go build cache, downloaded protocol sources, probe programs.
+.scratch/
+__pycache__/
+*.pyc
